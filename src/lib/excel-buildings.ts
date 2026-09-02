@@ -131,9 +131,13 @@ export function parseBuildingsWorkbook(buffer: ArrayBuffer): ParsedBuildingsWork
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) continue;
 
-    const headerRow = (
-      XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 })[0] ?? []
-    ).map((h) => (h === undefined || h === null ? "" : String(h).trim()));
+    // .map()은 배열의 "빈 슬롯"(셀 자체가 없는 컬럼 - 예: 완전히 빈 컬럼)을
+    // 건너뛰어 그 자리에 undefined가 그대로 남는다(null과 다름). Array.from은
+    // 빈 슬롯도 콜백을 호출해 채우므로 이 문제가 없다.
+    const headerRow = Array.from(
+      XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 })[0] ?? [],
+      (h) => (h === undefined || h === null ? "" : String(h).trim())
+    );
 
     if (headerRow.every((h) => h === "")) continue; // 빈 시트는 조용히 건너뜀
 
@@ -362,6 +366,15 @@ function matchHeaders(headerRow: string[], requiredFields: FieldKey[]) {
         break;
       }
     }
+  }
+
+  // "구분" 계열 후보 이름으로 못 찾았으면, "종합"과 "작동"이 둘 다 들어간 헤더를
+  // 찾는다 (실무 파일에서 이 컬럼 헤더가 "종합/작동", "종합·작동" 등으로 다양하게
+  // 쓰여서 후보 목록만으로 다 예측하기 어렵다 - 두 단어가 같이 들어간 헤더가 다른
+  // 필드일 가능성은 사실상 없어 안전하다).
+  if (mapping.inspectionCategory === undefined) {
+    const idx = headerRow.findIndex((h) => h?.includes("종합") && h?.includes("작동"));
+    if (idx !== -1) mapping.inspectionCategory = idx;
   }
 
   const matchedCount = Object.keys(mapping).length;
