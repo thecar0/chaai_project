@@ -8,8 +8,10 @@ import { buildingSchema } from "@/lib/validators";
 import { createBuildingsBatch, type BatchBuildingItem } from "@/lib/create-building";
 import { ExcelParseError, parseBuildingsWorkbook, type ParsedBuildingRow } from "@/lib/excel-buildings";
 import { isLikelyTopTierBuilding } from "@/lib/capacity";
-import { lookupAddressForRegistry } from "@/lib/gov-api/juso";
+import { lookupAddressForRegistry, searchAddressByKeyword } from "@/lib/gov-api/juso";
 import { fetchBuildingRegistry } from "@/lib/gov-api/building-registry";
+
+type BuildingInput = z.infer<typeof buildingSchema>;
 
 // 여러 행을 한 번의 INSERT로 묶어서 처리하기 때문에(createBuildingsBatch),
 // 이 한도는 DB 성능이 아니라 "잘못 올라온 초대형 파일" 방지용 안전장치에 가깝다.
@@ -58,6 +60,74 @@ async function lookupTopTierApprovalDate(row: ParsedBuildingRow): Promise<string
     return registry?.useApprovalDate ?? null;
   } catch {
     return null;
+  }
+}
+
+// 동시에 너무 많은 정부 API 요청을 보내면(수백 건) 상대 서버에 부담을 주고
+// 타임아웃 위험도 커지므로, 한 번에 이 개수만큼만 동시에 처리한다.
+const ENRICH_CONCURRENCY = 15;
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const current = next++;
+      results[current] = await fn(items[current]);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+// "선택한 N건 등록"을 누른 시점에, 비어있는 항목(주소·연면적·층수·사용승인일·
+// 주용도)을 정부 데이터로 채워서 실제 저장되는 값의 정확도를 높인다. 이미 엑셀에
+// 값이 있으면 덮어쓰지 않는다(사용자가 준 원본 데이터를 신뢰) - 빈 칸만 채운다.
+// 조회에 실패해도(주소 불명, API 오류, 대장 없음 등) 등록 자체는 막지 않고 원래
+// 값 그대로 둔다.
+async function enrichFromRegistry(data: BuildingInput): Promise<BuildingInput> {
+  let address = data.address;
+  if (!address && data.name) {
+    try {
+      const found = await searchAddressByKeyword(data.name);
+      if (found) address = found.roadAddr || found.jibunAddr;
+    } catch {
+      // 이름으로도 주소를 못 찾으면 그냥 원래대로 둔다.
+    }
+  }
+
+  const needsRegistry =
+    !data.totalFloorAreaM2 ||
+    !data.floorCount ||
+    !data.useApprovalDate ||
+    !data.buildingType ||
+    data.buildingType === "미상";
+  if (!address || !needsRegistry) {
+    return address === data.address ? data : { ...data, address };
+  }
+
+  try {
+    const registryParams = await lookupAddressForRegistry(address);
+    if (!registryParams) return { ...data, address };
+    const registry = await fetchBuildingRegistry(registryParams);
+    if (!registry) return { ...data, address };
+    return {
+      ...data,
+      address,
+      totalFloorAreaM2: data.totalFloorAreaM2 ?? registry.totalFloorAreaM2 ?? undefined,
+      floorCount: data.floorCount ?? registry.groundFloorCount ?? undefined,
+      useApprovalDate: data.useApprovalDate ?? registry.useApprovalDate ?? undefined,
+      buildingType:
+        !data.buildingType || data.buildingType === "미상"
+          ? (registry.mainPurpose ?? data.buildingType)
+          : data.buildingType,
+    };
+  } catch {
+    return { ...data, address };
   }
 }
 
@@ -199,7 +269,7 @@ async function handleCommit(req: NextRequest, userId: number) {
   const seenInBatch = new Set<string>();
 
   const results: RowResult[] = [];
-  const validItems: BatchBuildingItem[] = [];
+  const okItems: { sheetName: string; rowNumber: number; data: BuildingInput }[] = [];
 
   for (const item of parsedBody.data.items) {
     const { sheetName, rowNumber, ...buildingData } = item;
@@ -215,26 +285,40 @@ async function handleCommit(req: NextRequest, userId: number) {
       });
       continue;
     }
+    okItems.push({ sheetName, rowNumber, data: parsed.data });
+  }
+
+  // 빈 항목(주소·연면적·층수·사용승인일·주용도)이 있는 행만 정부 데이터로 채운다 -
+  // 이미 다 채워진 행은 API를 호출하지 않아 불필요한 지연을 줄인다.
+  const enrichedData = await mapWithConcurrency(okItems, ENRICH_CONCURRENCY, (item) =>
+    enrichFromRegistry(item.data)
+  );
+
+  const validItems: BatchBuildingItem[] = [];
+
+  okItems.forEach((item, i) => {
+    const data = enrichedData[i];
 
     // 미리보기 이후 DB가 바뀌었거나 같은 건을 다시 보냈을 수 있으니 커밋 시점에도
-    // 한 번 더 중복을 확인한다 (건너뛰지 않고 여기서 최종적으로 막음).
-    if (parsed.data.address) {
-      const key = duplicateKey(parsed.data.name, parsed.data.address);
+    // 한 번 더 중복을 확인한다 (건너뛰지 않고 여기서 최종적으로 막음). 정부
+    // 데이터로 방금 채운 주소도 포함해서 검사한다.
+    if (data.address) {
+      const key = duplicateKey(data.name, data.address);
       if (existingKeys.has(key) || seenInBatch.has(key)) {
         results.push({
-          sheetName,
-          rowNumber,
+          sheetName: item.sheetName,
+          rowNumber: item.rowNumber,
           success: false,
-          name: parsed.data.name,
+          name: data.name,
           error: "이미 등록된 건물과 이름·주소가 동일합니다 (중복)",
         });
-        continue;
+        return;
       }
       seenInBatch.add(key);
     }
 
-    validItems.push({ data: parsed.data, rowNumber, sheetName });
-  }
+    validItems.push({ data, rowNumber: item.rowNumber, sheetName: item.sheetName });
+  });
 
   const batchResults = await createBuildingsBatch(userId, validItems);
   results.push(...batchResults);

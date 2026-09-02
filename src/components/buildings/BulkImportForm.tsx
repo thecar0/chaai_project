@@ -212,9 +212,11 @@ export default function BulkImportForm() {
         </a>
         <p className="text-[11px] text-silver-400">
           여러 시트로 나뉜 파일도 시트별로 각각 인식해서 모두 처리합니다. 주소·연면적·
-          사용승인일이 없어도 일단 등록되고, 나중에 &ldquo;주소 채우기&rdquo;·&ldquo;연면적
-          채우기&rdquo;·건축물대장 대조에서 채울 수 있습니다. 미리보기에서 빼고 싶은
-          행은 선택 해제한 뒤 등록하세요.
+          층수·사용승인일·주용도가 비어있는 행은 &ldquo;선택한 N건 등록&rdquo;을 누르는
+          시점에 건축물대장에서 자동으로 조회해 채웁니다 (엑셀에 이미 값이 있으면
+          덮어쓰지 않고, 조회에 실패해도 등록은 그대로 진행됩니다 - 행 수가 많으면
+          시간이 좀 걸릴 수 있습니다). 미리보기에서 빼고 싶은 행은 선택 해제한 뒤
+          등록하세요.
         </p>
       </div>
 
@@ -252,8 +254,8 @@ export default function BulkImportForm() {
 
       {previewRows && (
         <div className="overflow-hidden rounded-2xl border border-silver-300/70 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-silver-200 px-5 py-3 text-[13px] text-graphite">
-            <span>
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-silver-200 px-5 py-3 text-[13px] text-graphite">
+            <span className="min-w-0 flex-1">
               총 {previewRows.length}건 중{" "}
               <span className="font-medium text-ink">{includedCount}건 선택됨</span>
               {invalidPreviewRows.length > 0 && (
@@ -291,9 +293,9 @@ export default function BulkImportForm() {
             <button
               onClick={handleCommit}
               disabled={committing || includedCount === 0}
-              className="rounded-lg bg-ink px-4 py-2 text-[13px] font-medium text-white transition-all duration-150 hover:bg-black active:scale-[0.98] disabled:opacity-50"
+              className="shrink-0 whitespace-nowrap rounded-lg bg-ink px-4 py-2 text-[13px] font-medium text-white transition-all duration-150 hover:bg-black active:scale-[0.98] disabled:opacity-50"
             >
-              {committing ? "등록 중..." : `선택한 ${includedCount}건 등록`}
+              {committing ? "정부 데이터 확인 후 등록 중..." : `선택한 ${includedCount}건 등록`}
             </button>
           </div>
           <div className="max-h-[560px] overflow-y-auto">
