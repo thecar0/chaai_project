@@ -38,6 +38,26 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+// 점검팀 - 건물 수가 많아지면 인원을 3~5명 단위 소규모 팀으로 나눠서 각자
+// 담당 건물만 돌게 하는 게 현장에서 더 효율적이라(거리·규모 고려), 계정(회사)
+// 하나 아래에 팀을 여러 개 두고 건물마다 담당 팀을 지정한다. 로그인 계정은
+// 지금처럼 회사에 1개 그대로이고(팀별 로그인 분리는 아님), 팀은 어디까지나
+// 같은 계정 안에서 건물을 나눠 보고 나눠 배치하기 위한 분류다.
+export const teams = pgTable(
+  "teams",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    name: varchar("name", { length: 100 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdIdx: index("teams_user_id_idx").on(table.userId),
+  })
+);
+
 // 건축물대장에서 옮겨오는 핵심 필드
 export const buildings = pgTable(
   "buildings",
@@ -46,6 +66,8 @@ export const buildings = pgTable(
     userId: integer("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
+    // 담당 팀 - 미배정(null) 허용. 팀이 삭제돼도 건물은 남아야 하므로 set null.
+    teamId: integer("team_id").references(() => teams.id, { onDelete: "set null" }),
     name: varchar("name", { length: 255 }).notNull(), // 건축물명
     // 대지위치/도로명주소 - 실제 주소를 모르는 경우(예: 엑셀에 주소 없이 이름만 있는
     // 행) null로 두고, 나중에 "주소 채우기"에서 건축물명으로 검색해 채워 넣는다.
@@ -76,6 +98,7 @@ export const buildings = pgTable(
   },
   (table) => ({
     userIdIdx: index("buildings_user_id_idx").on(table.userId),
+    teamIdIdx: index("buildings_team_id_idx").on(table.teamId),
   })
 );
 
@@ -127,12 +150,25 @@ export const drivingDistances = pgTable(
 
 export const usersRelations = relations(users, ({ many }) => ({
   buildings: many(buildings),
+  teams: many(teams),
+}));
+
+export const teamsRelations = relations(teams, ({ one, many }) => ({
+  owner: one(users, {
+    fields: [teams.userId],
+    references: [users.id],
+  }),
+  buildings: many(buildings),
 }));
 
 export const buildingsRelations = relations(buildings, ({ one, many }) => ({
   owner: one(users, {
     fields: [buildings.userId],
     references: [users.id],
+  }),
+  team: one(teams, {
+    fields: [buildings.teamId],
+    references: [teams.id],
   }),
   inspections: many(inspectionSchedules),
 }));

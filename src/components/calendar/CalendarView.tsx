@@ -27,7 +27,11 @@ type Inspection = {
   isManuallyScheduled: boolean;
   buildingId: number;
   buildingName: string;
+  teamId: number | null;
+  teamName: string | null;
 };
+
+type Team = { id: number; name: string };
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 const PAGE_SIZE = 8; // 사이드 목록 한 페이지당 표시 개수 (달력 세로 길이에 맞춘 값)
@@ -43,6 +47,9 @@ export default function CalendarView() {
   const [showPlacement, setShowPlacement] = useState(false);
   const [page, setPage] = useState(0);
   const [monthFilter, setMonthFilter] = useState<"all" | "postponed" | "completed">("all");
+  const [teams, setTeams] = useState<Team[]>([]);
+  // "all" | "unassigned" | "<teamId>"
+  const [teamFilter, setTeamFilter] = useState("all");
 
   const loadInspections = useCallback(() => {
     fetch("/api/inspections")
@@ -58,32 +65,47 @@ export default function CalendarView() {
   }, [loadInspections]);
 
   useEffect(() => {
+    fetch("/api/teams")
+      .then((res) => res.json())
+      .then((data) => setTeams(data.teams ?? []));
+  }, []);
+
+  useEffect(() => {
     setPage(0);
-  }, [cursor, selectedDate, monthFilter]);
+  }, [cursor, selectedDate, monthFilter, teamFilter]);
 
   const days = useMemo(() => buildMonthGrid(cursor), [cursor]);
   const today = useMemo(() => toDateString(new Date()), []);
 
+  // 팀을 고르면 캘린더 전체(그리드 점·사이드 목록·인력 배치)가 그 팀 담당
+  // 건물로만 좁혀진다 - "1팀 캘린더"처럼 팀별로 화면을 전환하는 셈.
+  const visibleInspections = useMemo(() => {
+    if (teamFilter === "all") return inspections;
+    if (teamFilter === "unassigned") return inspections.filter((i) => i.teamId == null);
+    const teamId = Number(teamFilter);
+    return inspections.filter((i) => i.teamId === teamId);
+  }, [inspections, teamFilter]);
+
   const inspectionsByDate = useMemo(() => {
     const map = new Map<string, Inspection[]>();
-    for (const insp of inspections) {
+    for (const insp of visibleInspections) {
       const list = map.get(insp.scheduledDate) ?? [];
       list.push(insp);
       map.set(insp.scheduledDate, list);
     }
     return map;
-  }, [inspections]);
+  }, [visibleInspections]);
 
   const monthInspections = useMemo(() => {
     const y = cursor.getFullYear();
     const m = cursor.getMonth();
-    return inspections
+    return visibleInspections
       .filter((i) => {
         const d = new Date(i.scheduledDate);
         return d.getFullYear() === y && d.getMonth() === m;
       })
       .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
-  }, [inspections, cursor]);
+  }, [visibleInspections, cursor]);
 
   // 이월 기준: 9월에 예정이던 걸 10월로 이월했다면, "옮겨진 날짜(10월)" 기준으로
   // 10월의 이월 탭에 뜬다 (monthInspections가 이미 scheduledDate 기준 월로 걸러져 있음).
@@ -135,16 +157,57 @@ export default function CalendarView() {
   }
 
   const cursorMonthValue = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+  const selectedTeamId = teamFilter === "all" || teamFilter === "unassigned" ? undefined : Number(teamFilter);
+  const selectedTeamLabel =
+    teamFilter === "all"
+      ? undefined
+      : teamFilter === "unassigned"
+        ? "미배정"
+        : (teams.find((t) => t.id === selectedTeamId)?.name ?? undefined);
 
   return (
     <div className="flex flex-col gap-6">
+      {teams.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1 rounded-full bg-silver-200 p-1 text-[13px] w-fit">
+          <button
+            onClick={() => setTeamFilter("all")}
+            className={`rounded-full px-3.5 py-1.5 font-medium transition-colors duration-200 ${
+              teamFilter === "all" ? "bg-ink text-white shadow-sm" : "text-graphite hover:text-ink"
+            }`}
+          >
+            전체
+          </button>
+          {teams.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTeamFilter(String(t.id))}
+              className={`rounded-full px-3.5 py-1.5 font-medium transition-colors duration-200 ${
+                teamFilter === String(t.id) ? "bg-ink text-white shadow-sm" : "text-graphite hover:text-ink"
+              }`}
+            >
+              {t.name}
+            </button>
+          ))}
+          <button
+            onClick={() => setTeamFilter("unassigned")}
+            className={`rounded-full px-3.5 py-1.5 font-medium transition-colors duration-200 ${
+              teamFilter === "unassigned" ? "bg-ink text-white shadow-sm" : "text-graphite hover:text-ink"
+            }`}
+          >
+            미배정
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_340px]">
         <div className="flex flex-col gap-6">
           {showPlacement && (
             <ScheduleRunForm
-              key={cursorMonthValue}
+              key={`${cursorMonthValue}-${teamFilter}`}
               initialMonth={cursorMonthValue}
               onApplied={loadInspections}
+              teamId={selectedTeamId}
+              teamLabel={selectedTeamLabel}
             />
           )}
 

@@ -23,7 +23,7 @@ export default async function BuildingDetailPage({
 
   const building = await db.query.buildings.findFirst({
     where: and(eq(buildings.id, Number(params.id)), eq(buildings.userId, session.userId)),
-    with: { inspections: true },
+    with: { inspections: true, team: true },
   });
 
   if (!building) notFound();
@@ -42,6 +42,8 @@ export default async function BuildingDetailPage({
       </div>
 
       <dl className="grid max-w-md grid-cols-2 gap-y-3 rounded-2xl border border-silver-300/70 bg-white p-6 text-[13px] shadow-sm">
+        <dt className="text-silver-500">담당 팀</dt>
+        <dd>{building.team?.name ?? "미배정"}</dd>
         <dt className="text-silver-500">주용도</dt>
         <dd>{building.buildingType}</dd>
         <dt className="text-silver-500">연면적</dt>

@@ -45,6 +45,7 @@ export async function createBuildingWithSchedule(userId: number, data: BuildingI
     .insert(buildings)
     .values({
       userId,
+      teamId: data.teamId,
       name: data.name,
       address: data.address,
       buildingType: data.buildingType,
@@ -118,6 +119,7 @@ export async function createBuildingsBatch(
         .values(
           chunk.map((item) => ({
             userId,
+            teamId: item.data.teamId,
             name: item.data.name,
             address: item.data.address,
             buildingType: item.data.buildingType,

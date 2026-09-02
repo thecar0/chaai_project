@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const LINKS = [
   { href: "/calendar", label: "캘린더" },
   { href: "/buildings", label: "건축물" },
+  { href: "/teams", label: "팀 관리" },
 ];
 
 export default function DashboardNav({ isAdmin }: { isAdmin: boolean }) {

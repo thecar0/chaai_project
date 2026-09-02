@@ -27,6 +27,8 @@ type EditableRow = {
   notes: string | undefined;
   unitCount: number | undefined;
   isApartment: boolean | undefined;
+  teamId: number | undefined;
+  teamName: string | undefined;
   valid: boolean;
   // 주소/연면적/사용승인일이 전부 있어야 true. 없어도 저장은 되지만(나중에 정부
   // 데이터로 채울 수 있음), 조용히 "정상"으로 자동 선택되면 안 되므로 구분한다.
@@ -127,6 +129,7 @@ export default function BulkImportForm() {
           notes: r.notes,
           unitCount: r.unitCount,
           isApartment: r.isApartment,
+          teamId: r.teamId,
         })),
       }),
     });
@@ -318,6 +321,7 @@ export default function BulkImportForm() {
                   <th className="px-5 py-2 font-medium">주용도</th>
                   <th className="px-5 py-2 font-medium">연면적</th>
                   <th className="px-5 py-2 font-medium">사용승인일</th>
+                  <th className="px-5 py-2 font-medium">담당팀</th>
                   <th className="px-5 py-2 font-medium">상태</th>
                 </tr>
               </thead>
@@ -357,6 +361,17 @@ export default function BulkImportForm() {
                     </td>
                     <td className="px-5 py-2 align-top text-graphite">
                       {r.useApprovalDate || (r.recurringInspectionMonth ? `매년 ${r.recurringInspectionMonth}월` : "-")}
+                    </td>
+                    <td className="px-5 py-2 align-top text-graphite">
+                      {r.teamId ? (
+                        r.teamName
+                      ) : r.teamName ? (
+                        <span className="text-[12px] text-[#b25e00]" title="팀 관리에서 먼저 만들어주세요">
+                          &apos;{r.teamName}&apos; 못 찾음
+                        </span>
+                      ) : (
+                        "-"
+                      )}
                     </td>
                     <td className="px-5 py-2 align-top">
                       {!r.valid ? (

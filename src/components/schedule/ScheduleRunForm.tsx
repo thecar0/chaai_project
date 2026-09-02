@@ -74,9 +74,14 @@ function formatMinutes(minutes: number) {
 export default function ScheduleRunForm({
   initialMonth,
   onApplied,
+  teamId,
+  teamLabel,
 }: {
   initialMonth?: string;
   onApplied?: () => void;
+  // 없으면(전체) 팀 구분 없이 지금까지처럼 모든 건물을 대상으로 배치한다.
+  teamId?: number;
+  teamLabel?: string;
 }) {
   const router = useRouter();
   const [month, setMonth] = useState(initialMonth ?? currentMonthValue());
@@ -93,6 +98,7 @@ export default function ScheduleRunForm({
     month: string;
     personnelCount: number;
     dayCount: number;
+    teamLabel?: string;
   } | null>(null);
 
   // count를 생략하면 현재 입력값(personnelCount)을 쓴다 - "추천 인원으로 다시
@@ -107,7 +113,7 @@ export default function ScheduleRunForm({
     const res = await fetch("/api/schedule/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ month, personnelCount: effectiveCount }),
+      body: JSON.stringify({ month, personnelCount: effectiveCount, teamId }),
     });
     const data = await res.json();
     setLoading(false);
@@ -147,7 +153,12 @@ export default function ScheduleRunForm({
     }
     // 적용되면 미리보기 결과는 지우고 초기 화면으로 돌아간다 - 대신 방금 적용한
     // 내용(인원수 등)은 아래에 짧게 남겨둔다.
-    setLastApplied({ month, personnelCount: resultPersonnelCount, dayCount: result.days.length });
+    setLastApplied({
+      month,
+      personnelCount: resultPersonnelCount,
+      dayCount: result.days.length,
+      teamLabel,
+    });
     setResult(null);
     setResultPersonnelCount(null);
     router.refresh();
@@ -157,6 +168,11 @@ export default function ScheduleRunForm({
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-4 rounded-2xl border border-silver-300/70 bg-white p-6 shadow-sm">
+        {teamLabel && (
+          <p className="text-[12px] font-medium text-accent-600">
+            {teamLabel} 담당 건물만 대상으로 배치합니다.
+          </p>
+        )}
         <div className="flex flex-wrap items-end gap-4">
           <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
             대상 월
@@ -197,7 +213,8 @@ export default function ScheduleRunForm({
         {error && <p className="text-[13px] text-red-600">{error}</p>}
         {lastApplied && (
           <p className="text-[13px] font-medium text-[#1d7a34]">
-            ✓ {lastApplied.month} 배치를 인원 {lastApplied.personnelCount}명 기준으로
+            ✓ {lastApplied.teamLabel && `[${lastApplied.teamLabel}] `}
+            {lastApplied.month} 배치를 인원 {lastApplied.personnelCount}명 기준으로
             적용했습니다 (총 {lastApplied.dayCount}일)
           </p>
         )}

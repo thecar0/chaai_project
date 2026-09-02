@@ -50,6 +50,13 @@
       "when": 1788317444645,
       "tag": "0006_demonic_madelyne_pryor",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788336175005,
+      "tag": "0007_small_firedrake",
+      "breakpoints": true
     }
   ]
 }

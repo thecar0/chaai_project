@@ -20,6 +20,7 @@ function booleanToTriState(value: boolean | null | undefined): TriState {
 
 export type BuildingFormInitial = {
   id: number;
+  teamId: number | null;
   name: string;
   address: string | null;
   buildingType: string;
@@ -38,10 +39,17 @@ export type BuildingFormInitial = {
   unitCount: number | null;
 };
 
-export default function BuildingForm({ initial }: { initial?: BuildingFormInitial }) {
+export default function BuildingForm({
+  initial,
+  teams,
+}: {
+  initial?: BuildingFormInitial;
+  teams: { id: number; name: string }[];
+}) {
   const router = useRouter();
   const isEdit = Boolean(initial);
   const [form, setForm] = useState({
+    teamId: initial?.teamId?.toString() ?? "",
     name: initial?.name ?? "",
     address: initial?.address ?? "",
     buildingType: initial?.buildingType ?? "",
@@ -162,6 +170,7 @@ export default function BuildingForm({ initial }: { initial?: BuildingFormInitia
       method: isEdit ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        teamId: form.teamId ? Number(form.teamId) : undefined,
         name: form.name,
         address: form.address || undefined,
         buildingType: form.buildingType,
@@ -207,6 +216,30 @@ export default function BuildingForm({ initial }: { initial?: BuildingFormInitia
       onSubmit={handleSubmit}
       className="flex flex-col gap-4 rounded-2xl border border-silver-300/70 bg-white p-6 shadow-sm"
     >
+      <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
+        담당 팀
+        <select
+          value={form.teamId}
+          onChange={(e) => update("teamId", e.target.value)}
+          className="rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
+        >
+          <option value="">미배정</option>
+          {teams.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+        {teams.length === 0 && (
+          <span className="text-[12px] font-normal text-silver-400">
+            아직 만든 팀이 없습니다.{" "}
+            <a href="/teams" className="text-accent-600 hover:underline">
+              팀 관리
+            </a>
+            에서 먼저 만들 수 있습니다.
+          </span>
+        )}
+      </label>
       <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
         건축물명
         <input

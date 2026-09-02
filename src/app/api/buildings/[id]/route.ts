@@ -46,6 +46,7 @@ export async function PATCH(
   const [updated] = await db
     .update(buildings)
     .set({
+      teamId: data.teamId ?? null,
       name: data.name,
       address: data.address,
       buildingType: data.buildingType,

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { buildings } from "@/db/schema";
+import { buildings, teams } from "@/db/schema";
 import { getSession } from "@/lib/session";
 import { buildingSchema } from "@/lib/validators";
 import { createBuildingsBatch, type BatchBuildingItem } from "@/lib/create-building";
@@ -192,6 +192,14 @@ async function handlePreview(req: NextRequest, userId: number) {
     topTierDates.filter((r) => r.date != null).map((r) => [r.key, r.date as string])
   );
 
+  // 담당팀 - 이미 만들어져 있는 팀 이름과만(공백/대소문자 무시) 매칭한다. 오타 등으로
+  // 엉뚱한 이름이 있으면 새 팀을 만들지 않고 미배정으로 두고 이유를 메모에 남긴다.
+  const existingTeams = await db
+    .select({ id: teams.id, name: teams.name })
+    .from(teams)
+    .where(eq(teams.userId, userId));
+  const teamIdByName = new Map(existingTeams.map((t) => [t.name.trim().toLowerCase(), t.id]));
+
   // 주소·연면적·사용승인일은 저장을 막지는 않지만(나중에 정부 데이터로 채울 수
   // 있으므로), 정보가 빠진 채로 조용히 "정상"으로 자동 등록되면 안 된다 - 사용자가
   // 직접 확인하고 체크해서 등록하도록 어떤 정보가 없는지 구체적으로 표시해준다.
@@ -210,7 +218,19 @@ async function handlePreview(req: NextRequest, userId: number) {
         }
       : rawRow;
 
-    const parsed = buildingSchema.safeParse(row);
+    let teamId: number | undefined;
+    let notesWithTeam = row.notes;
+    if (row.teamName) {
+      const matchedId = teamIdByName.get(row.teamName.trim().toLowerCase());
+      if (matchedId != null) {
+        teamId = matchedId;
+      } else {
+        const note = `[담당팀 '${row.teamName}'을(를) 찾을 수 없어 미배정으로 등록됨 - 팀 관리에서 먼저 만들어주세요]`;
+        notesWithTeam = notesWithTeam ? `${notesWithTeam} ${note}` : note;
+      }
+    }
+
+    const parsed = buildingSchema.safeParse({ ...row, teamId, notes: notesWithTeam });
 
     const missingFields: string[] = [];
     if (!row.address) missingFields.push("주소");
@@ -223,6 +243,8 @@ async function handlePreview(req: NextRequest, userId: number) {
 
     return {
       ...row,
+      notes: notesWithTeam,
+      teamId,
       key: `${row.sheetName}::${row.rowNumber}`,
       valid: parsed.success,
       complete: missingFields.length === 0,

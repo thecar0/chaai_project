@@ -18,8 +18,14 @@ export const loginSchema = z.object({
 // 일단 등록되고, 나중에 "주소 채우기" · "연면적 채우기" · 건축물대장 대조에서
 // 정부 데이터로 채워 넣을 수 있다 (사용승인일도 없으면 그때까지 점검 일정은
 // 만들어지지 않는다 - create-building.ts 참고).
+export const teamSchema = z.object({
+  name: z.string().min(1, "팀 이름을 입력하세요").max(100, "팀 이름이 너무 깁니다(100자 이내)"),
+});
+
 export const buildingSchema = z.object({
   name: z.string().min(1, "건축물명을 입력하세요").max(255, "건축물명이 너무 깁니다(255자 이내)"),
+  // 담당 팀 - 미배정(undefined)이면 전체(팀 구분 없음)로 취급된다.
+  teamId: z.number().int().positive().optional(),
   // 주소를 모르는 행(예: 이름만 있는 엑셀 행)도 일단 등록하고, 나중에 "주소 채우기"에서
   // 건축물명으로 검색해 채운다.
   address: z

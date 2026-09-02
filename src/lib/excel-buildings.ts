@@ -10,7 +10,8 @@ type FieldKey =
   | "fireSafetyGrade"
   | "notes"
   | "unitCount"
-  | "inspectionCategory";
+  | "inspectionCategory"
+  | "teamName";
 
 // 회사마다 컬럼명이 제각각이므로, 필드마다 자주 쓰이는 여러 이름(조건)을 후보로 두고
 // 첫 행(헤더)에서 매칭되는 걸 찾는다. 순서대로 시도하며 먼저 매칭되는 것을 사용한다.
@@ -45,6 +46,9 @@ const HEADER_CANDIDATES: Record<FieldKey, string[]> = {
   // 행은 같은 건물의 종합점검월+6개월로 계산한다(같은 건물이 종합/작동 두 행으로
   // 따로 있을 때 두 값을 각각 사용승인일처럼 취급해서 일정이 겹치는 걸 방지).
   inspectionCategory: ["구분", "점검구분", "점검종류", "종류"],
+  // 담당 팀 - 이미 만들어져 있는 팀 이름과 일치할 때만 배정하고(오타 등으로
+  // 새 팀이 마구 생기지 않도록), 못 찾으면 미배정으로 등록한다.
+  teamName: ["담당팀", "담당 팀", "팀", "팀명", "소속팀"],
 };
 
 const FIELD_LABEL: Record<FieldKey, string> = {
@@ -58,6 +62,7 @@ const FIELD_LABEL: Record<FieldKey, string> = {
   notes: "비고",
   unitCount: "세대수",
   inspectionCategory: "구분(종합/작동)",
+  teamName: "담당팀",
 };
 
 // 일반 건축물대장형 시트: 사용승인일까지 필수
@@ -94,6 +99,9 @@ export type ParsedBuildingRow = {
   // "구분" 컬럼에서 읽은 값 - 있으면 종합/작동 계산 분리에 쓰이고, 없으면(컬럼
   // 자체가 없거나 값을 못 알아보면) 기존 방식(이 행의 월을 그대로 사용승인월로) 유지.
   rowInspectionType: "comprehensive" | "operational" | undefined;
+  // "담당팀" 컬럼의 원문 텍스트 - 실제 팀 배정(teamId)은 이미 만들어진 팀
+  // 이름과 대조해서 API 라우트에서 결정한다(엑셀 파서는 팀 목록을 모름).
+  teamName: string | undefined;
 };
 
 export type ParsedBuildingsWorkbook = {
@@ -182,6 +190,7 @@ export function parseBuildingsWorkbook(buffer: ArrayBuffer): ParsedBuildingsWork
 
       const rawNotes = toTrimmedString(get(row, "notes")) || undefined;
       const rowInspectionType = normalizeInspectionCategory(get(row, "inspectionCategory"));
+      const teamName = toTrimmedString(get(row, "teamName")) || undefined;
 
       // "세대수" 전용 컬럼이 있으면 그걸 우선 쓰고, 없으면 연면적 셀 안에
       // "20,053.26㎡/121세대"처럼 같이 적혀 있는 세대수를 뽑아낸다.
@@ -212,6 +221,7 @@ export function parseBuildingsWorkbook(buffer: ArrayBuffer): ParsedBuildingsWork
           unitCount,
           isApartment,
           rowInspectionType,
+          teamName,
         });
       } else {
         rows.push({
@@ -229,6 +239,7 @@ export function parseBuildingsWorkbook(buffer: ArrayBuffer): ParsedBuildingsWork
           unitCount,
           isApartment,
           rowInspectionType,
+          teamName,
         });
       }
     });
@@ -315,6 +326,7 @@ function mergeComprehensiveOperationalPairs(
         comprehensive.fireSafetyGrade ??= op.fireSafetyGrade;
         comprehensive.unitCount ??= op.unitCount;
         comprehensive.isApartment ??= op.isApartment;
+        comprehensive.teamName ??= op.teamName;
       }
       if (operationalRows.length > 0) {
         const note = `[가져오기: 같은 이름·주소의 작동점검 행(${operationalRows

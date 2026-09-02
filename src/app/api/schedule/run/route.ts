@@ -24,6 +24,8 @@ import {
 const runSchema = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/, "YYYY-MM 형식이어야 합니다"),
   personnelCount: z.number().int().min(3, "기술인력은 최소 3명부터 계산됩니다"),
+  // 팀별로 나눠서 배치할 때 쓴다 - 없으면(전체) 팀 구분 없이 지금까지처럼 동작한다.
+  teamId: z.number().int().positive().optional(),
 });
 
 const CATEGORIES: InspectionCategory[] = ["comprehensive", "operational", "apartment"];
@@ -52,11 +54,14 @@ async function collectCategoryRawBuildings(
   session: SessionPayload,
   category: InspectionCategory,
   monthStart: string,
-  monthEnd: string
+  monthEnd: string,
+  teamId: number | undefined
 ): Promise<{ rawBuildings: RawCategoryBuilding[]; warnings: string[]; found: boolean }> {
   const isGeneralBuilding = or(eq(buildings.isApartment, false), isNull(buildings.isApartment));
   // 사용자가 날짜를 직접 지정(이월)한 건은 자동 배치 대상에서 제외한다.
   const notManuallyScheduled = eq(inspectionSchedules.isManuallyScheduled, false);
+  // teamId가 없으면(전체 보기) 팀 조건을 아예 안 걸어서 지금까지처럼 전체 건물을 대상으로 한다.
+  const teamCondition = teamId != null ? eq(buildings.teamId, teamId) : undefined;
   const where =
     category === "apartment"
       ? and(
@@ -64,7 +69,8 @@ async function collectCategoryRawBuildings(
           gte(inspectionSchedules.scheduledDate, monthStart),
           lte(inspectionSchedules.scheduledDate, monthEnd),
           eq(buildings.isApartment, true),
-          notManuallyScheduled
+          notManuallyScheduled,
+          teamCondition
         )
       : and(
           eq(buildings.userId, session.userId),
@@ -72,7 +78,8 @@ async function collectCategoryRawBuildings(
           lte(inspectionSchedules.scheduledDate, monthEnd),
           isGeneralBuilding,
           eq(inspectionSchedules.inspectionType, category),
-          notManuallyScheduled
+          notManuallyScheduled,
+          teamCondition
         );
 
   const rows = await db
@@ -230,7 +237,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const { month, personnelCount } = parsed.data;
+  const { month, personnelCount, teamId } = parsed.data;
 
   const [yearStr, monthStr] = month.split("-");
   const year = Number(yearStr);
@@ -246,7 +253,9 @@ export async function POST(req: NextRequest) {
     // 세 카테고리는 서로 독립적인 조회+지오코딩이라 병렬로 처리한다 (예전엔
     // 순서대로 기다려서 카테고리 수만큼 느려졌었다).
     const categoryResults = await Promise.all(
-      CATEGORIES.map((category) => collectCategoryRawBuildings(session, category, monthStart, monthEnd))
+      CATEGORIES.map((category) =>
+        collectCategoryRawBuildings(session, category, monthStart, monthEnd, teamId)
+      )
     );
     for (const r of categoryResults) {
       allRawBuildings.push(...r.rawBuildings);
@@ -261,7 +270,15 @@ export async function POST(req: NextRequest) {
   }
 
   if (!anyFound) {
-    return NextResponse.json({ error: "해당 월에 예정된 점검이 없습니다." }, { status: 404 });
+    return NextResponse.json(
+      {
+        error:
+          teamId != null
+            ? "해당 월에 이 팀 담당 건물의 예정된 점검이 없습니다."
+            : "해당 월에 예정된 점검이 없습니다.",
+      },
+      { status: 404 }
+    );
   }
 
   const startDate = new Date(year, monthNum - 1, 1);

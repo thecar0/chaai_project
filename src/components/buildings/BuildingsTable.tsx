@@ -11,7 +11,11 @@ export type BuildingRow = {
   address: string | null;
   useApprovalDate: string | null;
   recurringInspectionMonth: number | null;
+  teamId: number | null;
+  teamName: string | null;
 };
+
+export type TeamOption = { id: number; name: string };
 
 const GROUP_PAGE_SIZE = 15;
 const SPECIAL_GROUP = "특수기호";
@@ -40,21 +44,40 @@ function getInitialGroup(name: string): string {
   return SPECIAL_GROUP;
 }
 
-export default function BuildingsTable({ buildings }: { buildings: BuildingRow[] }) {
+export default function BuildingsTable({
+  buildings,
+  teams,
+  initialTeamFilter,
+}: {
+  buildings: BuildingRow[];
+  teams: TeamOption[];
+  initialTeamFilter?: string;
+}) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [query, setQuery] = useState("");
+  // "all" | "unassigned" | "<teamId>"
+  const [teamFilter, setTeamFilter] = useState(initialTeamFilter ?? "all");
+  const [bulkTeamValue, setBulkTeamValue] = useState("");
+  const [reassigning, setReassigning] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const headerCheckboxRef = useRef<HTMLInputElement>(null);
 
+  const teamFilteredBuildings = useMemo(() => {
+    if (teamFilter === "all") return buildings;
+    if (teamFilter === "unassigned") return buildings.filter((b) => b.teamId == null);
+    const teamId = Number(teamFilter);
+    return buildings.filter((b) => b.teamId === teamId);
+  }, [buildings, teamFilter]);
+
   const filteredBuildings = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return buildings;
-    return buildings.filter(
+    if (!q) return teamFilteredBuildings;
+    return teamFilteredBuildings.filter(
       (b) => b.name.toLowerCase().includes(q) || (b.useApprovalDate ?? "").includes(q)
     );
-  }, [buildings, query]);
+  }, [teamFilteredBuildings, query]);
 
   const groupedBuildings = useMemo(() => {
     const map = new Map<string, BuildingRow[]>();
@@ -134,15 +157,57 @@ export default function BuildingsTable({ buildings }: { buildings: BuildingRow[]
     router.refresh();
   }
 
+  async function handleReassignTeam() {
+    if (selected.size === 0 || bulkTeamValue === "") return;
+    setReassigning(true);
+
+    const res = await fetch("/api/buildings/bulk-team", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ids: Array.from(selected),
+        teamId: bulkTeamValue === "unassigned" ? null : Number(bulkTeamValue),
+      }),
+    });
+    setReassigning(false);
+
+    if (!res.ok) {
+      const data = await res.json();
+      alert(typeof data.error === "string" ? data.error : "팀 변경에 실패했습니다.");
+      return;
+    }
+
+    setSelected(new Set());
+    setBulkTeamValue("");
+    router.refresh();
+  }
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="이름 또는 날짜(YYYY-MM-DD)로 검색"
-          className="w-full max-w-xs rounded-lg border border-silver-300 bg-white px-3.5 py-2 text-[13px] outline-none transition-all duration-150 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10"
-        />
+        <div className="flex min-w-0 flex-1 gap-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="이름 또는 날짜(YYYY-MM-DD)로 검색"
+            className="w-full max-w-xs rounded-lg border border-silver-300 bg-white px-3.5 py-2 text-[13px] outline-none transition-all duration-150 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10"
+          />
+          {teams.length > 0 && (
+            <select
+              value={teamFilter}
+              onChange={(e) => setTeamFilter(e.target.value)}
+              className="shrink-0 rounded-lg border border-silver-300 bg-white px-3 py-2 text-[13px] outline-none transition-all duration-150 focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10"
+            >
+              <option value="all">전체 팀</option>
+              <option value="unassigned">미배정</option>
+              {teams.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         <div className="flex shrink-0 gap-2">
           <Link
             href="/buildings/missing-address"
@@ -172,15 +237,37 @@ export default function BuildingsTable({ buildings }: { buildings: BuildingRow[]
       </div>
 
       {selected.size > 0 && (
-        <div className="flex items-center justify-between rounded-xl bg-silver-200 px-4 py-2.5 text-[13px]">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-silver-200 px-4 py-2.5 text-[13px]">
           <span className="text-graphite">{selected.size}건 선택됨</span>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               onClick={() => setSelected(new Set())}
               className="text-silver-500 transition-colors duration-150 hover:text-ink"
             >
               선택 해제
             </button>
+            <div className="flex items-center gap-1.5">
+              <select
+                value={bulkTeamValue}
+                onChange={(e) => setBulkTeamValue(e.target.value)}
+                className="rounded-lg border border-silver-300 bg-white px-2.5 py-1.5 text-[13px] outline-none focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10"
+              >
+                <option value="">담당 팀 변경...</option>
+                <option value="unassigned">미배정으로 변경</option>
+                {teams.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}로 변경
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleReassignTeam}
+                disabled={reassigning || bulkTeamValue === ""}
+                className="rounded-lg border border-silver-300 bg-white px-3 py-1.5 text-[13px] font-medium text-ink transition-all duration-150 hover:border-accent-500 hover:text-accent-600 active:scale-[0.98] disabled:opacity-50"
+              >
+                {reassigning ? "변경 중..." : "적용"}
+              </button>
+            </div>
             <button
               onClick={handleDeleteSelected}
               disabled={deleting}
@@ -215,6 +302,7 @@ export default function BuildingsTable({ buildings }: { buildings: BuildingRow[]
                   <th className="px-5 py-3 font-medium">건축물명</th>
                   <th className="px-5 py-3 font-medium">주소</th>
                   <th className="whitespace-nowrap px-5 py-3 font-medium">사용승인일</th>
+                  <th className="whitespace-nowrap px-5 py-3 font-medium">담당 팀</th>
                 </tr>
               </thead>
               <tbody>
@@ -229,7 +317,7 @@ export default function BuildingsTable({ buildings }: { buildings: BuildingRow[]
                   return (
                     <Fragment key={group}>
                       <tr>
-                        <td colSpan={4} className="bg-silver-100 px-5 py-1.5">
+                        <td colSpan={5} className="bg-silver-100 px-5 py-1.5">
                           <label className="flex items-center gap-2 text-[12px] font-semibold text-silver-500">
                             <input
                               type="checkbox"
@@ -278,11 +366,14 @@ export default function BuildingsTable({ buildings }: { buildings: BuildingRow[]
                           <td className="whitespace-nowrap px-5 py-3 text-graphite">
                             {formatMonthOnly(b)}
                           </td>
+                          <td className="whitespace-nowrap px-5 py-3 text-graphite">
+                            {b.teamName ?? <span className="text-silver-400">미배정</span>}
+                          </td>
                         </tr>
                       ))}
                       {remaining > 0 && (
                         <tr>
-                          <td colSpan={4} className="px-5 py-2 text-center">
+                          <td colSpan={5} className="px-5 py-2 text-center">
                             <button
                               onClick={() => expandGroup(group)}
                               className="text-[12px] font-medium text-accent-600 transition-colors duration-150 hover:text-accent-500"
