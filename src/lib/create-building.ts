@@ -1,10 +1,44 @@
 import type { z } from "zod";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import { buildings, inspectionSchedules } from "@/db/schema";
 import { calculateUpcomingInspections, getApprovalBasisDate } from "./inspection-rules";
 import type { buildingSchema } from "./validators";
 
 type BuildingInput = z.infer<typeof buildingSchema>;
+
+// 사용승인일/반복 점검월이 없어서 점검 일정 없이 등록됐던 건물이, 나중에 수정
+// 화면에서 그 정보가 채워지면 최초 일정을 만들어준다. 이미 일정이 하나라도
+// 있으면(과거에 생성됐거나 완료 사이클이 있었거나) 건드리지 않는다.
+export async function maybeGenerateInitialSchedule(buildingId: number) {
+  const existing = await db
+    .select({ id: inspectionSchedules.id })
+    .from(inspectionSchedules)
+    .where(eq(inspectionSchedules.buildingId, buildingId))
+    .limit(1);
+  if (existing.length > 0) return null;
+
+  const [building] = await db.select().from(buildings).where(eq(buildings.id, buildingId));
+  if (!building) return null;
+
+  const basisDate = getApprovalBasisDate(building);
+  if (!basisDate) return null;
+
+  const plans = calculateUpcomingInspections(basisDate);
+  if (plans.length === 0) return null;
+
+  return db
+    .insert(inspectionSchedules)
+    .values(
+      plans.map((p) => ({
+        buildingId,
+        inspectionType: p.inspectionType,
+        scheduledDate: p.scheduledDate,
+        status: p.status,
+      }))
+    )
+    .returning();
+}
 
 export async function createBuildingWithSchedule(userId: number, data: BuildingInput) {
   const [building] = await db

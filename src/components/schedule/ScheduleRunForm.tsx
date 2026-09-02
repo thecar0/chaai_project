@@ -73,14 +73,22 @@ export default function ScheduleRunForm({
   const [personnelCount, setPersonnelCount] = useState(3);
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
-  const [applied, setApplied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
+  // result를 계산할 때 쓴 인원수를 따로 저장해둔다 - 결과가 떠 있는 동안 위쪽
+  // 인원수 입력칸을 바꿔도(재계산 전) 실제 이 결과가 몇 명 기준인지 헷갈리지 않게.
+  const [resultPersonnelCount, setResultPersonnelCount] = useState<number | null>(null);
+  // 적용 후 초기 화면으로 돌아간 뒤에도 "방금 뭘 적용했는지" 확인할 수 있게 남겨둔다.
+  const [lastApplied, setLastApplied] = useState<{
+    month: string;
+    personnelCount: number;
+    dayCount: number;
+  } | null>(null);
 
   async function runPlacement() {
     setError(null);
     setLoading(true);
-    setApplied(false);
+    setLastApplied(null);
 
     const res = await fetch("/api/schedule/run", {
       method: "POST",
@@ -95,12 +103,13 @@ export default function ScheduleRunForm({
       return;
     }
     setResult(data);
+    setResultPersonnelCount(personnelCount);
   }
 
   // 미리보기에서 이미 계산해둔 결과를 그대로 저장만 한다 - 배치를 처음부터
   // 다시 계산(거리 API 재호출 포함)하지 않으므로 훨씬 빠르다.
   async function applyResult() {
-    if (!result) return;
+    if (!result || resultPersonnelCount == null) return;
     setError(null);
     setApplying(true);
 
@@ -121,7 +130,11 @@ export default function ScheduleRunForm({
       setError(typeof data.error === "string" ? data.error : "적용에 실패했습니다.");
       return;
     }
-    setApplied(true);
+    // 적용되면 미리보기 결과는 지우고 초기 화면으로 돌아간다 - 대신 방금 적용한
+    // 내용(인원수 등)은 아래에 짧게 남겨둔다.
+    setLastApplied({ month, personnelCount: resultPersonnelCount, dayCount: result.days.length });
+    setResult(null);
+    setResultPersonnelCount(null);
     router.refresh();
     onApplied?.();
   }
@@ -165,10 +178,21 @@ export default function ScheduleRunForm({
           아니며, 실제 소요시간은 건물 구조·설비 복잡도에 따라 달라질 수 있습니다.
         </p>
         {error && <p className="text-[13px] text-red-600">{error}</p>}
+        {lastApplied && (
+          <p className="text-[13px] font-medium text-[#1d7a34]">
+            ✓ {lastApplied.month} 배치를 인원 {lastApplied.personnelCount}명 기준으로
+            적용했습니다 (총 {lastApplied.dayCount}일)
+          </p>
+        )}
       </div>
 
       {result && (
         <>
+          <p className="text-[11px] text-silver-400">
+            인원 {resultPersonnelCount}명 기준 배치 결과입니다. 주말은 배치 대상에서
+            빠지고 평일에만 배치되며, 목록에 없는 평일은 그날 배치할 대상이 없어서
+            (다른 날짜에 이미 배치됨) 표시되지 않은 것입니다.
+          </p>
           {result.warnings.length > 0 && (
             <div className="rounded-2xl border border-[#fdeceb] bg-[#fdeceb]/40 p-5 text-[13px]">
               <div className="mb-1 flex items-center justify-between">
@@ -191,19 +215,16 @@ export default function ScheduleRunForm({
           )}
 
           <div className="flex items-center justify-between rounded-xl bg-silver-200 px-4 py-2.5 text-[13px]">
-            <span className="text-graphite">총 {result.days.length}일 배치</span>
-            {!applied && (
-              <button
-                onClick={() => applyResult()}
-                disabled={applying}
-                className="rounded-lg border border-[#ffb3ad] bg-white px-3 py-1.5 text-[13px] font-medium text-[#d70015] transition-all duration-150 hover:bg-[#fdeceb] active:scale-[0.98] disabled:opacity-50"
-              >
-                {applying ? "적용 중..." : "이대로 적용"}
-              </button>
-            )}
-            {applied && (
-              <span className="text-[13px] font-medium text-[#1d7a34]">캘린더에 적용됨</span>
-            )}
+            <span className="text-graphite">
+              총 {result.days.length}일 배치 · 인원 {resultPersonnelCount}명 기준
+            </span>
+            <button
+              onClick={() => applyResult()}
+              disabled={applying}
+              className="rounded-lg border border-[#ffb3ad] bg-white px-3 py-1.5 text-[13px] font-medium text-[#d70015] transition-all duration-150 hover:bg-[#fdeceb] active:scale-[0.98] disabled:opacity-50"
+            >
+              {applying ? "적용 중..." : "이대로 적용"}
+            </button>
           </div>
 
           <div className="flex flex-col gap-3">

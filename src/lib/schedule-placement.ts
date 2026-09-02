@@ -5,7 +5,8 @@ import {
   REFERENCE_WORK_MINUTES,
   type InspectionCategory,
 } from "./capacity";
-import { getDrivingRoute, type Coordinates } from "./geo/kakao";
+import { getCachedDrivingRoute } from "./geo/distance-cache";
+import type { Coordinates } from "./geo/kakao";
 
 export type PlacementBuilding = {
   buildingId: number;
@@ -43,7 +44,12 @@ export type PlacementResult = {
   unplaced: (PlacementDayItem & { reason: string })[];
 };
 
-type DistanceFn = (a: Coordinates, b: Coordinates) => Promise<{ distanceKm: number; durationMinutes: number } | null>;
+type DistanceFn = (
+  aBuildingId: number,
+  a: Coordinates,
+  bBuildingId: number,
+  b: Coordinates
+) => Promise<{ distanceKm: number; durationMinutes: number } | null>;
 
 // 실제 경로를 못 구했을 때(API 실패 등) 직선거리로 대략 이동시간을 추정하는 데
 // 쓰는 참고용 평균 속도 - 법정 기준이 아니라 순전히 대략치 추정용이다.
@@ -51,6 +57,8 @@ const FALLBACK_AVERAGE_SPEED_KMH = 30;
 
 /**
  * 대상 건물들을 하루 능력(=1, 100%) 안에서 최대한 채워 날짜별로 배치한다.
+ * 주말(토·일)은 점검을 배치하지 않는다 - 평일에만 배치되고, 시작일이나 이월된
+ * 날짜가 주말이면 다음 평일로 넘어간다.
  *
  * 종합점검 8,000㎡·작동점검 10,000㎡·아파트 250세대는 "같은 하루치 능력을
  * 서로 다른 기준으로 표현한 것"이라서, 하루에 종합점검 건물 + 작동점검 건물 +
@@ -67,8 +75,7 @@ const FALLBACK_AVERAGE_SPEED_KMH = 30;
  * 통상 가용시간 안에 다 쓴다"고 가정한 참고 페이스일 뿐이다.
  *
  * - 혼자서도 하루 능력(비율 1)을 넘는 건물(점검일수 > 1)은 다른 건물과 묶지 않고
- *   단독으로 필요한 일수만큼 연속 배치한다 (이 경우 하루치 분량이 항상 법정
- *   한도 이하이므로 참고 소요시간도 자동으로 420분 이하가 된다 - 별도 확인 불필요).
+ *   단독으로 필요한 일수만큼 연속(평일 기준) 배치한다.
  * - 나머지는 그리디 최근접 방식으로 하루에 최대한 채운다(유형 상관없이 지리적으로
  *   가까운 순): 직선거리(하버사인)로 가장 가까운 후보를 먼저 추린 뒤, 그 후보에
  *   대해서만 실제 주행거리·소요시간 API를 호출해 거리 감액과 시간 확인을 적용한다.
@@ -80,15 +87,41 @@ const DAILY_CAPACITY = 1;
 const MONTH_OVERFLOW_REASON =
   "이번 달 안에 배치할 수 없습니다 (인원 부족 - 인원수를 늘리거나 다음 달로 넘기세요).";
 
+function isWeekend(d: Date): boolean {
+  const day = d.getDay();
+  return day === 0 || day === 6;
+}
+
+// 주말이면 다음 평일로 넘긴다 (시작일 보정용).
+function toWeekday(d: Date): Date {
+  const copy = new Date(d);
+  while (isWeekend(copy)) copy.setDate(copy.getDate() + 1);
+  return copy;
+}
+
+// 하루 전진하되, 그 결과가 주말이면 다음 평일까지 계속 넘긴다.
+function nextWeekday(d: Date): Date {
+  const copy = new Date(d);
+  copy.setDate(copy.getDate() + 1);
+  return toWeekday(copy);
+}
+
+// start(평일이라고 가정)로부터 평일 기준으로 steps번 전진한 날짜.
+function weekdayAfterSteps(start: Date, steps: number): Date {
+  let d = new Date(start);
+  for (let i = 0; i < steps; i++) d = nextWeekday(d);
+  return d;
+}
+
 export async function placeInspections(
   buildings: PlacementBuilding[],
   startDate: Date,
   endDate: Date,
-  getRoute: DistanceFn = getDrivingRoute
+  getRoute: DistanceFn = getCachedDrivingRoute
 ): Promise<PlacementResult> {
   const days: PlacementDay[] = [];
   const unplaced: PlacementResult["unplaced"] = [];
-  let cursor = new Date(startDate);
+  let cursor = toWeekday(new Date(startDate));
 
   const soloPool: PlacementBuilding[] = [];
   const packPool: PlacementBuilding[] = [];
@@ -102,10 +135,10 @@ export async function placeInspections(
     (daysNeeded > 1 ? soloPool : packPool).push(b);
   }
 
-  // 1) 혼자서도 하루 능력을 넘는 건물부터 연속 배치 (선택한 달을 넘어가면 배치하지 않음)
+  // 1) 혼자서도 하루 능력을 넘는 건물부터 연속(평일 기준) 배치 (선택한 달을 넘어가면 배치하지 않음)
   for (const b of soloPool) {
     const daysNeeded = calculateInspectionDays(b.usageRatio, DAILY_CAPACITY);
-    if (addDays(cursor, daysNeeded - 1) > endDate) {
+    if (weekdayAfterSteps(cursor, daysNeeded - 1) > endDate) {
       unplaced.push({ ...toItem(b), reason: MONTH_OVERFLOW_REASON });
       continue;
     }
@@ -123,7 +156,7 @@ export async function placeInspections(
         usedRatio: DAILY_CAPACITY,
         estimatedMinutes: estimateWorkMinutes(dayRatio),
       });
-      cursor = addDays(cursor, 1);
+      cursor = nextWeekday(cursor);
     }
   }
 
@@ -141,12 +174,14 @@ export async function placeInspections(
     let remainingCapacity = DAILY_CAPACITY;
     let remainingMinutes = REFERENCE_WORK_MINUTES;
     let lastCoords: Coordinates | null = null;
+    let lastBuildingId: number | null = null;
 
     const first = remaining.shift()!;
     dayItems.push(toItem(first));
     remainingCapacity -= first.usageRatio;
     remainingMinutes -= estimateWorkMinutes(first.usageRatio);
     lastCoords = first.coordinates ?? null;
+    lastBuildingId = first.buildingId;
 
     while (remaining.length > 0) {
       // 직선거리로 가장 가까운 후보를 먼저 고른다 (API 호출량 절약용 사전 필터)
@@ -164,8 +199,8 @@ export async function placeInspections(
       const candidate = remaining[nearestIdx];
       let distanceKm = 0;
       let travelMinutes = 0;
-      if (lastCoords && candidate.coordinates) {
-        const route = await getRoute(lastCoords, candidate.coordinates);
+      if (lastCoords && candidate.coordinates && lastBuildingId != null) {
+        const route = await getRoute(lastBuildingId, lastCoords, candidate.buildingId, candidate.coordinates);
         if (route) {
           distanceKm = route.distanceKm;
           travelMinutes = route.durationMinutes;
@@ -187,6 +222,7 @@ export async function placeInspections(
       remainingCapacity = degradedCapacity - candidate.usageRatio;
       remainingMinutes -= candidateMinutes;
       lastCoords = candidate.coordinates ?? lastCoords;
+      lastBuildingId = candidate.buildingId;
     }
 
     days.push({
@@ -195,7 +231,7 @@ export async function placeInspections(
       usedRatio: DAILY_CAPACITY - remainingCapacity,
       estimatedMinutes: REFERENCE_WORK_MINUTES - remainingMinutes,
     });
-    cursor = addDays(cursor, 1);
+    cursor = nextWeekday(cursor);
   }
 
   return { days, unplaced };
@@ -224,12 +260,6 @@ function haversineKm(a: Coordinates | null, b: Coordinates | null): number {
   const h =
     Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
-}
-
-function addDays(d: Date, n: number): Date {
-  const copy = new Date(d);
-  copy.setDate(copy.getDate() + n);
-  return copy;
 }
 
 function toDateString(d: Date): string {

@@ -12,24 +12,52 @@ function triStateToBoolean(value: TriState): boolean | undefined {
   return undefined;
 }
 
-export default function BuildingForm() {
+function booleanToTriState(value: boolean | null | undefined): TriState {
+  if (value === true) return "true";
+  if (value === false) return "false";
+  return "";
+}
+
+export type BuildingFormInitial = {
+  id: number;
+  name: string;
+  address: string | null;
+  buildingType: string;
+  totalFloorAreaM2: number | null;
+  floorCount: number | null;
+  useApprovalDate: string | null;
+  recurringInspectionMonth: number | null;
+  fireSafetyGrade: string | null;
+  notes: string | null;
+  hasSprinkler: boolean | null;
+  hasWaterSpray: boolean | null;
+  hasSmokeControl: boolean | null;
+  isMultiUseBusiness: boolean | null;
+  isPerformanceDesign: boolean | null;
+  isApartment: boolean | null;
+  unitCount: number | null;
+};
+
+export default function BuildingForm({ initial }: { initial?: BuildingFormInitial }) {
   const router = useRouter();
+  const isEdit = Boolean(initial);
   const [form, setForm] = useState({
-    name: "",
-    address: "",
-    buildingType: "",
-    totalFloorAreaM2: "",
-    floorCount: "",
-    useApprovalDate: "",
-    fireSafetyGrade: "",
-    notes: "",
-    hasSprinkler: "" as TriState,
-    hasWaterSpray: "" as TriState,
-    hasSmokeControl: "" as TriState,
-    isMultiUseBusiness: "" as TriState,
-    isPerformanceDesign: "" as TriState,
-    isApartment: false,
-    unitCount: "",
+    name: initial?.name ?? "",
+    address: initial?.address ?? "",
+    buildingType: initial?.buildingType ?? "",
+    totalFloorAreaM2: initial?.totalFloorAreaM2?.toString() ?? "",
+    floorCount: initial?.floorCount?.toString() ?? "",
+    useApprovalDate: initial?.useApprovalDate ?? "",
+    recurringInspectionMonth: initial?.recurringInspectionMonth?.toString() ?? "",
+    fireSafetyGrade: initial?.fireSafetyGrade ?? "",
+    notes: initial?.notes ?? "",
+    hasSprinkler: booleanToTriState(initial?.hasSprinkler),
+    hasWaterSpray: booleanToTriState(initial?.hasWaterSpray),
+    hasSmokeControl: booleanToTriState(initial?.hasSmokeControl),
+    isMultiUseBusiness: booleanToTriState(initial?.isMultiUseBusiness),
+    isPerformanceDesign: booleanToTriState(initial?.isPerformanceDesign),
+    isApartment: initial?.isApartment ?? false,
+    unitCount: initial?.unitCount?.toString() ?? "",
   });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,18 +71,21 @@ export default function BuildingForm() {
     setError(null);
     setLoading(true);
 
-    const res = await fetch("/api/buildings", {
-      method: "POST",
+    const res = await fetch(isEdit ? `/api/buildings/${initial!.id}` : "/api/buildings", {
+      method: isEdit ? "PATCH" : "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: form.name,
-        address: form.address,
+        address: form.address || undefined,
         buildingType: form.buildingType,
         totalFloorAreaM2: form.totalFloorAreaM2
           ? Number(form.totalFloorAreaM2)
           : undefined,
         floorCount: form.floorCount ? Number(form.floorCount) : undefined,
-        useApprovalDate: form.useApprovalDate,
+        useApprovalDate: form.useApprovalDate || undefined,
+        recurringInspectionMonth: form.recurringInspectionMonth
+          ? Number(form.recurringInspectionMonth)
+          : undefined,
         fireSafetyGrade: form.fireSafetyGrade || undefined,
         notes: form.notes || undefined,
         hasSprinkler: triStateToBoolean(form.hasSprinkler),
@@ -73,12 +104,14 @@ export default function BuildingForm() {
       setError(
         typeof data.error === "string"
           ? data.error
-          : "건축물 등록에 실패했습니다"
+          : isEdit
+            ? "건축물 수정에 실패했습니다"
+            : "건축물 등록에 실패했습니다"
       );
       return;
     }
 
-    router.push("/buildings");
+    router.push(isEdit ? `/buildings/${initial!.id}` : "/buildings");
     router.refresh();
   }
 
@@ -97,12 +130,11 @@ export default function BuildingForm() {
         />
       </label>
       <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
-        대지위치 / 도로명주소
+        대지위치 / 도로명주소 (모르면 비워두고 나중에 &ldquo;주소 채우기&rdquo;로 채울 수 있음)
         <input
           value={form.address}
           onChange={(e) => update("address", e.target.value)}
           className="rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
-          required
         />
       </label>
       <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
@@ -135,16 +167,28 @@ export default function BuildingForm() {
           />
         </label>
       </div>
-      <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
-        사용승인일 (점검 주기 산정 기준)
-        <input
-          type="date"
-          value={form.useApprovalDate}
-          onChange={(e) => update("useApprovalDate", e.target.value)}
-          className="rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
-          required
-        />
-      </label>
+      <div className="flex gap-3">
+        <label className="flex flex-1 flex-col gap-1.5 text-[13px] font-medium text-graphite">
+          사용승인일 (점검 주기 산정 기준)
+          <input
+            type="date"
+            value={form.useApprovalDate}
+            onChange={(e) => update("useApprovalDate", e.target.value)}
+            className="rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
+          />
+        </label>
+        <label className="flex flex-1 flex-col gap-1.5 text-[13px] font-medium text-graphite">
+          또는 반복 점검월 (1~12, 사용승인일 모를 때)
+          <input
+            type="number"
+            min={1}
+            max={12}
+            value={form.recurringInspectionMonth}
+            onChange={(e) => update("recurringInspectionMonth", e.target.value)}
+            className="rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
+          />
+        </label>
+      </div>
       <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
         소방안전관리대상물 등급 (선택)
         <input
@@ -223,7 +267,7 @@ export default function BuildingForm() {
         disabled={loading}
         className="mt-1 rounded-lg bg-ink px-4 py-2.5 text-sm font-medium text-white transition-all duration-150 hover:bg-black active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100"
       >
-        {loading ? "등록 중..." : "등록하고 점검 일정 생성"}
+        {loading ? "저장 중..." : isEdit ? "저장" : "등록하고 점검 일정 생성"}
       </button>
     </form>
   );

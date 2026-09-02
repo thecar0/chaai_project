@@ -10,6 +10,7 @@ import {
   formatApprovalBasis,
 } from "@/lib/inspection-format";
 import VerifyRegistryButton from "@/components/buildings/VerifyRegistryButton";
+import BuildingDetailActions from "@/components/buildings/BuildingDetailActions";
 
 export default async function BuildingDetailPage({
   params,
@@ -28,11 +29,14 @@ export default async function BuildingDetailPage({
 
   return (
     <div className="flex flex-col gap-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{building.name}</h1>
-        <p className="mt-1 text-[13px] text-silver-500">
-          {building.address ?? "주소 없음 - 주소 채우기에서 채워주세요"}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{building.name}</h1>
+          <p className="mt-1 text-[13px] text-silver-500">
+            {building.address ?? "주소 없음 - 주소 채우기에서 채워주세요"}
+          </p>
+        </div>
+        <BuildingDetailActions buildingId={building.id} buildingName={building.name} />
       </div>
 
       <dl className="grid max-w-md grid-cols-2 gap-y-3 rounded-2xl border border-silver-300/70 bg-white p-6 text-[13px] shadow-sm">

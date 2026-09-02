@@ -10,6 +10,7 @@ import {
   doublePrecision,
   pgEnum,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -99,6 +100,28 @@ export const inspectionSchedules = pgTable(
     scheduledDateIdx: index("inspection_schedules_scheduled_date_idx").on(
       table.scheduledDate
     ),
+  })
+);
+
+// 실제 주행거리 API 결과 캐시 - 배치 미리보기를 다시 돌릴 때마다(인원수 바꿔서
+// 재시도 등) 같은 두 건물 쌍의 거리를 매번 다시 조회하면 느려지므로 한 번 구한
+// 값은 재사용한다. buildingIdA < buildingIdB로 정규화해서 저장(순서 무관하게 한 쌍당 1행).
+export const drivingDistances = pgTable(
+  "driving_distances",
+  {
+    id: serial("id").primaryKey(),
+    buildingIdA: integer("building_id_a")
+      .references(() => buildings.id, { onDelete: "cascade" })
+      .notNull(),
+    buildingIdB: integer("building_id_b")
+      .references(() => buildings.id, { onDelete: "cascade" })
+      .notNull(),
+    distanceKm: doublePrecision("distance_km").notNull(),
+    durationMinutes: doublePrecision("duration_minutes").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    pairIdx: uniqueIndex("driving_distances_pair_idx").on(table.buildingIdA, table.buildingIdB),
   })
 );
 
