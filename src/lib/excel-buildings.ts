@@ -369,11 +369,16 @@ function matchHeaders(headerRow: string[], requiredFields: FieldKey[]) {
   return { mapping, unmatchedRequired, matchedCount };
 }
 
-// 공백/괄호/단위 표기 차이를 흡수해서 비교 ("연면적(㎡)" ~ "연면적" 등)
+// 공백/괄호/단위 표기 차이를 흡수해서 비교 ("연면적(㎡)" ~ "연면적" 등). 괄호는
+// 문자만 지우는 게 아니라 그 안의 설명 텍스트까지 통째로 제거한다 - 안 그러면
+// "구분(종합/작동)"처럼 괄호 안에 부연설명이 붙은 실제 헤더가 후보("구분")와
+// 정확히 일치하지 않아 컬럼을 못 찾는 버그가 있었다(조용히 무시되어 사용자가
+// 알아채기 어려움).
 function normalizeHeader(h: string): string {
   return h
+    .replace(/[(（][^()（）]*[)）]/g, "")
     .replace(/\s+/g, "")
-    .replace(/[()（）[\]㎡m2]/gi, "")
+    .replace(/[[\]㎡m2]/gi, "")
     .toLowerCase();
 }
 
