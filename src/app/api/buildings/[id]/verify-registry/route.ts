@@ -8,6 +8,15 @@ import {
   BuildingRegistryApiError,
   fetchBuildingRegistry,
 } from "@/lib/gov-api/building-registry";
+import { maybeGenerateInitialSchedule } from "@/lib/create-building";
+
+type ApplyableField = "useApprovalDate" | "totalFloorAreaM2" | "floorCount" | "buildingType";
+const APPLYABLE_FIELDS: ApplyableField[] = [
+  "useApprovalDate",
+  "totalFloorAreaM2",
+  "floorCount",
+  "buildingType",
+];
 
 type ComparisonField = {
   field: string;
@@ -26,6 +35,9 @@ export async function POST(
 
   const body = await req.json().catch(() => ({}));
   const applyAreaOnly = body?.applyAreaOnly === true;
+  const applyField: ApplyableField | undefined = APPLYABLE_FIELDS.includes(body?.applyField)
+    ? body.applyField
+    : undefined;
 
   const building = await db.query.buildings.findFirst({
     where: and(eq(buildings.id, Number(params.id)), eq(buildings.userId, session.userId)),
@@ -94,6 +106,39 @@ export async function POST(
         .set({ totalFloorAreaM2: registry.totalFloorAreaM2 })
         .where(eq(buildings.id, building.id));
       applied = true;
+      const areaRow = comparisons.find((c) => c.field === "totalFloorAreaM2");
+      if (areaRow) {
+        areaRow.ourValue = registry.totalFloorAreaM2;
+        areaRow.match = true;
+      }
+    }
+
+    if (applyField) {
+      const govValueByField: Record<ApplyableField, string | number | null> = {
+        useApprovalDate: registry.useApprovalDate,
+        totalFloorAreaM2: registry.totalFloorAreaM2,
+        floorCount: registry.groundFloorCount,
+        buildingType: registry.mainPurpose,
+      };
+      const value = govValueByField[applyField];
+      if (value != null) {
+        await db
+          .update(buildings)
+          .set({ [applyField]: value })
+          .where(eq(buildings.id, building.id));
+        applied = true;
+        // 방금 반영한 값으로 비교 결과도 같이 갱신해서 응답에 최신 상태가 그대로 담기게 한다.
+        const row = comparisons.find((c) => c.field === applyField);
+        if (row) {
+          row.ourValue = value;
+          row.match = true;
+        }
+        // 사용승인일이 없어서 점검 일정 없이 있던 건물이 이번 대체로 채워졌으면
+        // 최초 일정을 만들어준다.
+        if (applyField === "useApprovalDate") {
+          await maybeGenerateInitialSchedule(building.id);
+        }
+      }
     }
 
     return NextResponse.json({ comparisons, checkedAt: new Date().toISOString(), applied });

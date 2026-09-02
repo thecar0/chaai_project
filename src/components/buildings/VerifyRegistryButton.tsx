@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 type ComparisonField = {
   field: string;
@@ -11,26 +12,53 @@ type ComparisonField = {
 };
 
 export default function VerifyRegistryButton({ buildingId }: { buildingId: number }) {
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const [replacingField, setReplacingField] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [comparisons, setComparisons] = useState<ComparisonField[] | null>(null);
+
+  async function fetchComparisons() {
+    const res = await fetch(`/api/buildings/${buildingId}/verify-registry`, {
+      method: "POST",
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error ?? "정부 데이터 조회에 실패했습니다");
+      return false;
+    }
+    setComparisons(data.comparisons);
+    return true;
+  }
 
   async function handleVerify() {
     setLoading(true);
     setError(null);
     setComparisons(null);
+    await fetchComparisons();
+    setLoading(false);
+  }
+
+  async function handleReplace(field: string) {
+    setReplacingField(field);
+    setError(null);
 
     const res = await fetch(`/api/buildings/${buildingId}/verify-registry`, {
       method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ applyField: field }),
     });
     const data = await res.json();
-    setLoading(false);
 
     if (!res.ok) {
-      setError(data.error ?? "정부 데이터 조회에 실패했습니다");
+      setReplacingField(null);
+      setError(data.error ?? "정부 데이터로 대체하는 데 실패했습니다");
       return;
     }
+    // 대체 후에는 최신 비교 결과를 다시 받아와서 화면을 갱신한다.
     setComparisons(data.comparisons);
+    setReplacingField(null);
+    router.refresh();
   }
 
   return (
@@ -64,6 +92,15 @@ export default function VerifyRegistryButton({ buildingId }: { buildingId: numbe
                 >
                   {c.match ? "일치" : "불일치"}
                 </span>
+                {!c.match && c.govValue != null && (
+                  <button
+                    onClick={() => handleReplace(c.field)}
+                    disabled={replacingField === c.field}
+                    className="rounded-lg border border-silver-300 bg-white px-2.5 py-1 text-[11px] font-medium text-ink transition-all duration-150 hover:border-accent-500 hover:text-accent-600 active:scale-[0.98] disabled:opacity-50"
+                  >
+                    {replacingField === c.field ? "대체 중..." : "대체"}
+                  </button>
+                )}
               </div>
             </li>
           ))}

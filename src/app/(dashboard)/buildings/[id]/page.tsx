@@ -11,6 +11,7 @@ import {
 } from "@/lib/inspection-format";
 import VerifyRegistryButton from "@/components/buildings/VerifyRegistryButton";
 import BuildingDetailActions from "@/components/buildings/BuildingDetailActions";
+import BackButton from "@/components/BackButton";
 
 export default async function BuildingDetailPage({
   params,
@@ -29,6 +30,7 @@ export default async function BuildingDetailPage({
 
   return (
     <div className="flex flex-col gap-6">
+      <BackButton />
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{building.name}</h1>
