@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 type ComparisonField = {
   field: string;
@@ -16,6 +17,7 @@ export default function VerifyRegistryButton({ buildingId }: { buildingId: numbe
   const [loading, setLoading] = useState(false);
   const [replacingField, setReplacingField] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [suggestAddressFix, setSuggestAddressFix] = useState(false);
   const [comparisons, setComparisons] = useState<ComparisonField[] | null>(null);
 
   async function fetchComparisons() {
@@ -25,6 +27,7 @@ export default function VerifyRegistryButton({ buildingId }: { buildingId: numbe
     const data = await res.json();
     if (!res.ok) {
       setError(data.error ?? "정부 데이터 조회에 실패했습니다");
+      setSuggestAddressFix(Boolean(data.suggestAddressFix));
       return false;
     }
     setComparisons(data.comparisons);
@@ -34,6 +37,7 @@ export default function VerifyRegistryButton({ buildingId }: { buildingId: numbe
   async function handleVerify() {
     setLoading(true);
     setError(null);
+    setSuggestAddressFix(false);
     setComparisons(null);
     await fetchComparisons();
     setLoading(false);
@@ -71,7 +75,19 @@ export default function VerifyRegistryButton({ buildingId }: { buildingId: numbe
         {loading ? "정부 데이터 조회 중..." : "정부 데이터와 비교"}
       </button>
 
-      {error && <p className="text-[13px] text-red-600">{error}</p>}
+      {error && (
+        <div className="max-w-md text-[13px] text-red-600">
+          <p>{error}</p>
+          {suggestAddressFix && (
+            <Link
+              href={`/buildings/${buildingId}/edit`}
+              className="mt-1 inline-block font-medium underline hover:text-red-700"
+            >
+              건물 수정에서 주소 다시 찾기 →
+            </Link>
+          )}
+        </div>
+      )}
 
       {comparisons && (
         <ul className="flex flex-col gap-2">

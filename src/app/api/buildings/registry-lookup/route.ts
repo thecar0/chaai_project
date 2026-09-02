@@ -24,7 +24,10 @@ export async function POST(req: NextRequest) {
     const registryParams = await lookupAddressForRegistry(address);
     if (!registryParams) {
       return NextResponse.json(
-        { error: "입력된 주소로 법정동코드를 찾을 수 없습니다. 주소를 확인해주세요." },
+        {
+          error:
+            "입력한 주소로 정부 주소 데이터베이스에서 법정동코드를 찾을 수 없습니다. 지번이 실제와 다르거나 오래되어 없어진 지번일 수 있습니다. 위 '주소 검색'으로 정확한 주소를 다시 찾아 선택해보세요.",
+        },
         { status: 422 }
       );
     }

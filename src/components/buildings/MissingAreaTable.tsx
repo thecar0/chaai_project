@@ -14,10 +14,16 @@ export default function MissingAreaTable({ buildings }: { buildings: Building[] 
   const router = useRouter();
   const [loadingId, setLoadingId] = useState<number | null>(null);
   const [results, setResults] = useState<Record<number, string>>({});
+  const [addressFixIds, setAddressFixIds] = useState<Set<number>>(new Set());
 
   async function fetchFromRegistry(id: number) {
     setLoadingId(id);
     setResults((prev) => ({ ...prev, [id]: "" }));
+    setAddressFixIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
 
     const res = await fetch(`/api/buildings/${id}/verify-registry`, {
       method: "POST",
@@ -29,6 +35,9 @@ export default function MissingAreaTable({ buildings }: { buildings: Building[] 
 
     if (!res.ok) {
       setResults((prev) => ({ ...prev, [id]: data.error ?? "불러오기에 실패했습니다." }));
+      if (data.suggestAddressFix) {
+        setAddressFixIds((prev) => new Set(prev).add(id));
+      }
       return;
     }
     if (data.applied) {
@@ -84,7 +93,20 @@ export default function MissingAreaTable({ buildings }: { buildings: Building[] 
                     {loadingId === b.id ? "조회 중..." : "건축물대장에서 불러오기"}
                   </button>
                   {results[b.id] && (
-                    <span className="text-[12px] text-silver-500">{results[b.id]}</span>
+                    <span className="max-w-md text-[12px] text-silver-500">
+                      {results[b.id]}
+                      {addressFixIds.has(b.id) && (
+                        <>
+                          {" "}
+                          <Link
+                            href={`/buildings/${b.id}/edit`}
+                            className="font-medium text-accent-600 underline hover:text-accent-500"
+                          >
+                            주소 다시 찾기 →
+                          </Link>
+                        </>
+                      )}
+                    </span>
                   )}
                 </div>
               </td>
