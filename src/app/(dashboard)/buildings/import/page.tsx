@@ -1,8 +1,10 @@
 import BulkImportForm from "@/components/buildings/BulkImportForm";
+import BackButton from "@/components/BackButton";
 
 export default function ImportBuildingsPage() {
   return (
     <div className="flex flex-col gap-6">
+      <BackButton href="/buildings" />
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">엑셀로 일괄 등록</h1>
         <p className="mt-1 max-w-xl text-[13px] text-silver-500">

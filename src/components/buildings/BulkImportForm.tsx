@@ -31,6 +31,7 @@ type EditableRow = {
   // 주소/연면적/사용승인일이 전부 있어야 true. 없어도 저장은 되지만(나중에 정부
   // 데이터로 채울 수 있음), 조용히 "정상"으로 자동 선택되면 안 되므로 구분한다.
   complete: boolean;
+  missingFields: string[];
   error?: string;
 };
 
@@ -53,7 +54,6 @@ export default function BulkImportForm() {
   const [committing, setCommitting] = useState(false);
   const [previewRows, setPreviewRows] = useState<EditableRow[] | null>(null);
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
-  const [results, setResults] = useState<RowResult[] | null>(null);
   const [matchedColumns, setMatchedColumns] = useState<MatchedColumn[] | null>(null);
   const [skippedSheets, setSkippedSheets] = useState<SkippedSheet[] | null>(null);
   const [blankRowsSkipped, setBlankRowsSkipped] = useState(0);
@@ -61,7 +61,6 @@ export default function BulkImportForm() {
 
   function resetOutputs() {
     setError(null);
-    setResults(null);
     setPreviewRows(null);
     setExcluded(new Set());
     setMatchedColumns(null);
@@ -132,8 +131,17 @@ export default function BulkImportForm() {
       setError(typeof data.error === "string" ? data.error : "등록에 실패했습니다.");
       return;
     }
-    setResults(data.results);
-    setPreviewRows(null);
+
+    // 실패한 행이 있으면 리스트로 넘어가기 전에 알려준다 (그대로 넘어가면 조용히
+    // 묻힐 수 있어서).
+    const results: RowResult[] = data.results;
+    const failed = results.filter((r) => !r.success);
+    if (failed.length > 0) {
+      const detail = failed.map((r) => `- ${r.name || `${r.rowNumber}행`}: ${r.error}`).join("\n");
+      alert(`${results.length - failed.length}건 등록 완료, ${failed.length}건 실패\n\n${detail}`);
+    }
+
+    router.push("/buildings");
     router.refresh();
   }
 
@@ -157,11 +165,6 @@ export default function BulkImportForm() {
       return next;
     });
   }
-
-  const successCount = results?.filter((r) => r.success).length ?? 0;
-  const failureCount = (results?.length ?? 0) - successCount;
-  const sheetCount = new Set(results?.map((r) => r.sheetName)).size;
-  const multiSheet = sheetCount > 1;
 
   const validPreviewRows = previewRows?.filter((r) => r.valid) ?? [];
   const invalidPreviewRows = previewRows?.filter((r) => !r.valid) ?? [];
@@ -340,7 +343,7 @@ export default function BulkImportForm() {
                         <span className="text-[12px] text-[#d70015]">{r.error}</span>
                       ) : !r.complete ? (
                         <span className="text-[12px] text-[#b25e00]">
-                          정보 부족 (확인 필요)
+                          정보 부족: {r.missingFields.join(", ")} 없음
                         </span>
                       ) : (
                         <span className="text-[12px] text-silver-400">정상</span>
@@ -354,50 +357,6 @@ export default function BulkImportForm() {
         </div>
       )}
 
-      {results && (
-        <div className="overflow-hidden rounded-2xl border border-silver-300/70 bg-white shadow-sm">
-          <p className="border-b border-silver-200 px-5 py-3 text-[13px] text-graphite">
-            총 {results.length}건 중{" "}
-            <span className="font-medium text-[#1d7a34]">{successCount}건 성공</span>
-            {failureCount > 0 && (
-              <span className="text-[#d70015]"> · {failureCount}건 실패</span>
-            )}
-          </p>
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="border-b border-silver-200 text-left text-[12px] text-silver-500">
-                {multiSheet && <th className="px-5 py-2 font-medium">시트</th>}
-                <th className="px-5 py-2 font-medium">행</th>
-                <th className="px-5 py-2 font-medium">건축물명</th>
-                <th className="px-5 py-2 font-medium">결과</th>
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((r) => (
-                <tr
-                  key={`${r.sheetName}-${r.rowNumber}`}
-                  className="border-b border-silver-100 transition-colors duration-150 last:border-0 hover:bg-silver-50"
-                >
-                  {multiSheet && (
-                    <td className="px-5 py-2 text-graphite">{r.sheetName}</td>
-                  )}
-                  <td className="px-5 py-2 text-graphite">{r.rowNumber}</td>
-                  <td className="px-5 py-2">{r.name || "-"}</td>
-                  <td className="px-5 py-2">
-                    {r.success ? (
-                      <span className="rounded-full bg-[#e8f8ec] px-2 py-0.5 text-[11px] font-medium text-[#1d7a34]">
-                        성공
-                      </span>
-                    ) : (
-                      <span className="text-[12px] text-[#d70015]">{r.error}</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }

@@ -20,10 +20,29 @@ type RowResult = {
   error?: string;
 };
 
+// 건물명+주소가 둘 다 같으면 같은 건물로 본다. 주소가 없는 행은 비교할 수
+// 없으니(빈 주소끼리는 서로 다른 건물일 수 있음) 중복 검사에서 제외한다.
+function duplicateKey(name: string, address: string): string {
+  return `${name.trim()}::${address.trim()}`;
+}
+
+async function getExistingDuplicateKeys(userId: number): Promise<Set<string>> {
+  const rows = await db
+    .select({ name: buildings.name, address: buildings.address })
+    .from(buildings)
+    .where(eq(buildings.userId, userId));
+
+  const keys = new Set<string>();
+  for (const r of rows) {
+    if (r.address) keys.add(duplicateKey(r.name, r.address));
+  }
+  return keys;
+}
+
 // 미리보기(엑셀 업로드, multipart) - 실제로 저장하지 않고 행마다 유효성만 검사해서
 // 전체 필드를 그대로 돌려준다. 사용자가 화면에서 오류 있는 행을 직접 수정한 뒤
 // 커밋(JSON)으로 다시 보낸다.
-async function handlePreview(req: NextRequest) {
+async function handlePreview(req: NextRequest, userId: number) {
   const formData = await req.formData();
   const file = formData.get("file");
   if (!(file instanceof File)) {
@@ -50,23 +69,45 @@ async function handlePreview(req: NextRequest) {
     );
   }
 
+  const existingKeys = await getExistingDuplicateKeys(userId);
+  const seenInFile = new Set<string>();
+
   // 주소·연면적·사용승인일은 저장을 막지는 않지만(나중에 정부 데이터로 채울 수
   // 있으므로), 정보가 빠진 채로 조용히 "정상"으로 자동 등록되면 안 된다 - 사용자가
-  // 직접 확인하고 체크해서 등록하도록 별도로 표시해준다.
+  // 직접 확인하고 체크해서 등록하도록 어떤 정보가 없는지 구체적으로 표시해준다.
   const previewRows = rows.map((row) => {
     const parsed = buildingSchema.safeParse(row);
-    const complete =
-      Boolean(row.address) &&
-      Boolean(row.totalFloorAreaM2) &&
-      Boolean(row.useApprovalDate || row.recurringInspectionMonth);
+
+    const missingFields: string[] = [];
+    if (!row.address) missingFields.push("주소");
+    if (!row.totalFloorAreaM2) missingFields.push("연면적");
+    if (!row.useApprovalDate && !row.recurringInspectionMonth) missingFields.push("사용승인일");
+
+    // 건물명+주소가 이미 저장된 건물, 또는 같은 파일 안의 앞선 행과 겹치면 중복으로
+    // 막는다 (주소가 있는 행만 비교 대상).
+    let duplicateError: string | undefined;
+    if (row.address) {
+      const key = duplicateKey(row.name, row.address);
+      if (existingKeys.has(key)) {
+        duplicateError = "이미 등록된 건물과 이름·주소가 동일합니다 (중복)";
+      } else if (seenInFile.has(key)) {
+        duplicateError = "파일 안에 이름·주소가 같은 행이 이미 있습니다 (중복)";
+      } else {
+        seenInFile.add(key);
+      }
+    }
+
+    const schemaError = parsed.success
+      ? undefined
+      : (Object.values(parsed.error.flatten().fieldErrors)[0]?.[0] ?? "입력값을 확인해주세요.");
+
     return {
       ...row,
       key: `${row.sheetName}::${row.rowNumber}`,
-      valid: parsed.success,
-      complete,
-      error: parsed.success
-        ? undefined
-        : (Object.values(parsed.error.flatten().fieldErrors)[0]?.[0] ?? "입력값을 확인해주세요."),
+      valid: parsed.success && !duplicateError,
+      complete: missingFields.length === 0,
+      missingFields,
+      error: schemaError ?? duplicateError,
     };
   });
 
@@ -97,6 +138,9 @@ async function handleCommit(req: NextRequest, userId: number) {
     return NextResponse.json({ error: parsedBody.error.flatten() }, { status: 400 });
   }
 
+  const existingKeys = await getExistingDuplicateKeys(userId);
+  const seenInBatch = new Set<string>();
+
   const results: RowResult[] = [];
   const validItems: BatchBuildingItem[] = [];
 
@@ -114,6 +158,24 @@ async function handleCommit(req: NextRequest, userId: number) {
       });
       continue;
     }
+
+    // 미리보기 이후 DB가 바뀌었거나 같은 건을 다시 보냈을 수 있으니 커밋 시점에도
+    // 한 번 더 중복을 확인한다 (건너뛰지 않고 여기서 최종적으로 막음).
+    if (parsed.data.address) {
+      const key = duplicateKey(parsed.data.name, parsed.data.address);
+      if (existingKeys.has(key) || seenInBatch.has(key)) {
+        results.push({
+          sheetName,
+          rowNumber,
+          success: false,
+          name: parsed.data.name,
+          error: "이미 등록된 건물과 이름·주소가 동일합니다 (중복)",
+        });
+        continue;
+      }
+      seenInBatch.add(key);
+    }
+
     validItems.push({ data: parsed.data, rowNumber, sheetName });
   }
 
@@ -140,7 +202,7 @@ export async function POST(req: NextRequest) {
   if (contentType.includes("application/json")) {
     return handleCommit(req, session.userId);
   }
-  return handlePreview(req);
+  return handlePreview(req, session.userId);
 }
 
 const bulkDeleteSchema = z.object({

@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { buildings } from "@/db/schema";
 import { getSession } from "@/lib/session";
 import MissingAddressTable from "@/components/buildings/MissingAddressTable";
+import BackButton from "@/components/BackButton";
 
 export default async function MissingAddressPage() {
   const session = await getSession();
@@ -16,6 +17,7 @@ export default async function MissingAddressPage() {
 
   return (
     <div className="flex flex-col gap-6">
+      <BackButton href="/buildings" />
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">주소 채우기</h1>
         <p className="mt-1 max-w-xl text-[13px] text-silver-500">
