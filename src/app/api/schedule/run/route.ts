@@ -22,7 +22,6 @@ import {
 const runSchema = z.object({
   month: z.string().regex(/^\d{4}-\d{2}$/, "YYYY-MM 형식이어야 합니다"),
   personnelCount: z.number().int().min(3, "기술인력은 최소 3명부터 계산됩니다"),
-  apply: z.boolean().optional(),
 });
 
 const CATEGORIES: InspectionCategory[] = ["comprehensive", "operational", "apartment"];
@@ -85,9 +84,10 @@ async function collectCategoryBuildings(
     .innerJoin(buildings, eq(inspectionSchedules.buildingId, buildings.id))
     .where(where);
 
-  const placementBuildings: PlacementBuilding[] = [];
   const warnings: string[] = [];
 
+  // 1단계: 유효성 검사 + 점검면적(세대수) 계산 - 동기 작업이라 순서대로 걸러낸다.
+  const prepared: { row: (typeof rows)[number]; rawAmount: number }[] = [];
   for (const row of rows) {
     let rawAmount: number;
     if (category === "apartment") {
@@ -115,35 +115,42 @@ async function collectCategoryBuildings(
         isMultiUseBusiness: row.isMultiUseBusiness,
       });
     }
-
-    let coordinates: Coordinates | null = null;
-    if (row.latitude != null && row.longitude != null) {
-      coordinates = { lat: row.latitude, lng: row.longitude };
-    } else if (!row.address) {
-      warnings.push(`${row.name}: 주소가 없어 거리 계산 없이 배치됩니다. 주소 채우기에서 채워주세요.`);
-    } else {
-      coordinates = await geocodeAddress(row.address);
-      if (coordinates) {
-        await db
-          .update(buildings)
-          .set({ latitude: coordinates.lat, longitude: coordinates.lng })
-          .where(eq(buildings.id, row.buildingId));
-      } else {
-        warnings.push(`${row.name}: 주소로 좌표를 찾지 못해 거리 계산 없이 배치됩니다.`);
-      }
-    }
-
-    placementBuildings.push({
-      buildingId: row.buildingId,
-      inspectionId: row.inspectionId,
-      name: row.name,
-      inspectionType: row.inspectionType,
-      category,
-      rawAmount,
-      usageRatio: rawAmount / dailyLimit,
-      coordinates,
-    });
+    prepared.push({ row, rawAmount });
   }
+
+  // 2단계: 좌표 확보(캐시 없는 건 지오코딩 API 호출) - 건물마다 독립적이라 병렬로 처리한다.
+  // 예전엔 한 건씩 순서대로 기다려서, 건물이 많을수록 배치 미리보기가 느려지는 원인이었다.
+  const placementBuildings = await Promise.all(
+    prepared.map(async ({ row, rawAmount }): Promise<PlacementBuilding> => {
+      let coordinates: Coordinates | null = null;
+      if (row.latitude != null && row.longitude != null) {
+        coordinates = { lat: row.latitude, lng: row.longitude };
+      } else if (!row.address) {
+        warnings.push(`${row.name}: 주소가 없어 거리 계산 없이 배치됩니다. 주소 채우기에서 채워주세요.`);
+      } else {
+        coordinates = await geocodeAddress(row.address);
+        if (coordinates) {
+          await db
+            .update(buildings)
+            .set({ latitude: coordinates.lat, longitude: coordinates.lng })
+            .where(eq(buildings.id, row.buildingId));
+        } else {
+          warnings.push(`${row.name}: 주소로 좌표를 찾지 못해 거리 계산 없이 배치됩니다.`);
+        }
+      }
+
+      return {
+        buildingId: row.buildingId,
+        inspectionId: row.inspectionId,
+        name: row.name,
+        inspectionType: row.inspectionType,
+        category,
+        rawAmount,
+        usageRatio: rawAmount / dailyLimit,
+        coordinates,
+      };
+    })
+  );
 
   return { placementBuildings, warnings, found: rows.length > 0 };
 }
@@ -157,7 +164,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const { month, personnelCount, apply } = parsed.data;
+  const { month, personnelCount } = parsed.data;
 
   const [yearStr, monthStr] = month.split("-");
   const year = Number(yearStr);
@@ -171,19 +178,20 @@ export async function POST(req: NextRequest) {
   let anyFound = false;
 
   try {
-    for (const category of CATEGORIES) {
-      const dailyLimit = getDailyLimit(personnelCount, category);
-      dailyLimits[category] = dailyLimit;
-      const { placementBuildings, warnings, found } = await collectCategoryBuildings(
-        session,
-        category,
-        monthStart,
-        monthEnd,
-        dailyLimit
-      );
-      allPlacementBuildings.push(...placementBuildings);
-      allWarnings.push(...warnings);
-      if (found) anyFound = true;
+    // 세 카테고리는 서로 독립적인 조회+지오코딩이라 병렬로 처리한다 (예전엔
+    // 순서대로 기다려서 카테고리 수만큼 느려졌었다).
+    const categoryResults = await Promise.all(
+      CATEGORIES.map(async (category) => {
+        const dailyLimit = getDailyLimit(personnelCount, category);
+        const result = await collectCategoryBuildings(session, category, monthStart, monthEnd, dailyLimit);
+        return { category, dailyLimit, ...result };
+      })
+    );
+    for (const r of categoryResults) {
+      dailyLimits[r.category] = r.dailyLimit;
+      allPlacementBuildings.push(...r.placementBuildings);
+      allWarnings.push(...r.warnings);
+      if (r.found) anyFound = true;
     }
   } catch (err) {
     if (err instanceof CapacityRuleError) {
@@ -250,23 +258,11 @@ export async function POST(req: NextRequest) {
     category: CATEGORY_LABEL[u.category],
   }));
 
-  if (apply) {
-    for (const day of days) {
-      for (const group of day.groups) {
-        for (const item of group.items) {
-          await db
-            .update(inspectionSchedules)
-            .set({ scheduledDate: day.date })
-            .where(eq(inspectionSchedules.id, item.inspectionId));
-        }
-      }
-    }
-  }
-
+  // 실제 저장(적용)은 이 라우트에서 하지 않는다 - /api/schedule/apply가 여기서
+  // 계산한 days를 그대로 받아 저장만 한다 (재계산 없이 빠르게 적용하기 위함).
   return NextResponse.json({
     days,
     unplaced,
     warnings: allWarnings,
-    applied: Boolean(apply),
   });
 }

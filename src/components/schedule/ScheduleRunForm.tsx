@@ -40,7 +40,6 @@ type RunResult = {
   days: MergedDay[];
   unplaced: { buildingId: number; inspectionId: number; name: string; reason: string; category: string }[];
   warnings: string[];
-  applied: boolean;
 };
 
 function currentMonthValue() {
@@ -64,31 +63,57 @@ export default function ScheduleRunForm({
   const [personnelCount, setPersonnelCount] = useState(3);
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
+  const [applied, setApplied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RunResult | null>(null);
 
-  async function runPlacement(apply: boolean) {
+  async function runPlacement() {
     setError(null);
-    apply ? setApplying(true) : setLoading(true);
+    setLoading(true);
+    setApplied(false);
 
     const res = await fetch("/api/schedule/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ month, personnelCount, apply }),
+      body: JSON.stringify({ month, personnelCount }),
     });
     const data = await res.json();
-
-    apply ? setApplying(false) : setLoading(false);
+    setLoading(false);
 
     if (!res.ok) {
       setError(typeof data.error === "string" ? data.error : "배치 계산에 실패했습니다.");
       return;
     }
     setResult(data);
-    if (apply) {
-      router.refresh();
-      onApplied?.();
+  }
+
+  // 미리보기에서 이미 계산해둔 결과를 그대로 저장만 한다 - 배치를 처음부터
+  // 다시 계산(거리 API 재호출 포함)하지 않으므로 훨씬 빠르다.
+  async function applyResult() {
+    if (!result) return;
+    setError(null);
+    setApplying(true);
+
+    const res = await fetch("/api/schedule/apply", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        days: result.days.map((day) => ({
+          date: day.date,
+          inspectionIds: day.groups.flatMap((group) => group.items.map((item) => item.inspectionId)),
+        })),
+      }),
+    });
+    const data = await res.json();
+    setApplying(false);
+
+    if (!res.ok) {
+      setError(typeof data.error === "string" ? data.error : "적용에 실패했습니다.");
+      return;
     }
+    setApplied(true);
+    router.refresh();
+    onApplied?.();
   }
 
   return (
@@ -115,7 +140,7 @@ export default function ScheduleRunForm({
             />
           </label>
           <button
-            onClick={() => runPlacement(false)}
+            onClick={() => runPlacement()}
             disabled={loading}
             className="rounded-lg bg-ink px-4 py-2.5 text-sm font-medium text-white transition-all duration-150 hover:bg-black active:scale-[0.98] disabled:opacity-50"
           >
@@ -154,16 +179,16 @@ export default function ScheduleRunForm({
 
           <div className="flex items-center justify-between rounded-xl bg-silver-200 px-4 py-2.5 text-[13px]">
             <span className="text-graphite">총 {result.days.length}일 배치</span>
-            {!result.applied && (
+            {!applied && (
               <button
-                onClick={() => runPlacement(true)}
+                onClick={() => applyResult()}
                 disabled={applying}
                 className="rounded-lg border border-[#ffb3ad] bg-white px-3 py-1.5 text-[13px] font-medium text-[#d70015] transition-all duration-150 hover:bg-[#fdeceb] active:scale-[0.98] disabled:opacity-50"
               >
                 {applying ? "적용 중..." : "이대로 적용"}
               </button>
             )}
-            {result.applied && (
+            {applied && (
               <span className="text-[13px] font-medium text-[#1d7a34]">캘린더에 적용됨</span>
             )}
           </div>
