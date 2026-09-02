@@ -1,0 +1,1 @@
+ALTER TABLE "inspection_schedules" ADD COLUMN "is_manually_scheduled" boolean DEFAULT false NOT NULL;
