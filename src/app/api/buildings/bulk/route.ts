@@ -6,7 +6,10 @@ import { buildings } from "@/db/schema";
 import { getSession } from "@/lib/session";
 import { buildingSchema } from "@/lib/validators";
 import { createBuildingsBatch, type BatchBuildingItem } from "@/lib/create-building";
-import { ExcelParseError, parseBuildingsWorkbook } from "@/lib/excel-buildings";
+import { ExcelParseError, parseBuildingsWorkbook, type ParsedBuildingRow } from "@/lib/excel-buildings";
+import { isLikelyTopTierBuilding } from "@/lib/capacity";
+import { lookupAddressForRegistry } from "@/lib/gov-api/juso";
+import { fetchBuildingRegistry } from "@/lib/gov-api/building-registry";
 
 // 여러 행을 한 번의 INSERT로 묶어서 처리하기 때문에(createBuildingsBatch),
 // 이 한도는 DB 성능이 아니라 "잘못 올라온 초대형 파일" 방지용 안전장치에 가깝다.
@@ -39,6 +42,34 @@ async function getExistingDuplicateKeys(userId: number): Promise<Set<string>> {
   return keys;
 }
 
+// 특급대상물(추정)은 연 2회(반기별) 종합점검이라 정확한 사용승인일이 특히
+// 중요하다 - 엑셀 값을 그대로 믿지 않고, 건축물대장에서 실제 사용승인일을
+// 조회해서 덮어쓴다. 조회에 실패해도(주소 불명, API 오류, 대장 없음 등) 가져오기
+// 자체는 막지 않고 원래 값을 그대로 둔다 - 어디까지나 정확도를 높이는 보정이지
+// 필수 검증 단계는 아니다. 정부 API(juso.go.kr/data.go.kr)가 순간적으로
+// 불안정할 때가 있어(관찰됨: 동일 요청이 직후 재시도 시 성공), 실패 시 한 번만
+// 재시도한다.
+async function lookupTopTierApprovalDateOnce(row: ParsedBuildingRow): Promise<string | null> {
+  const registryParams = await lookupAddressForRegistry(row.address!);
+  if (!registryParams) return null;
+  const registry = await fetchBuildingRegistry(registryParams);
+  return registry?.useApprovalDate ?? null;
+}
+
+async function lookupTopTierApprovalDate(row: ParsedBuildingRow): Promise<string | null> {
+  if (!row.address) return null;
+  if (!isLikelyTopTierBuilding(row)) return null;
+  try {
+    return await lookupTopTierApprovalDateOnce(row);
+  } catch {
+    try {
+      return await lookupTopTierApprovalDateOnce(row);
+    } catch {
+      return null;
+    }
+  }
+}
+
 // 미리보기(엑셀 업로드, multipart) - 실제로 저장하지 않고 행마다 유효성만 검사해서
 // 전체 필드를 그대로 돌려준다. 사용자가 화면에서 오류 있는 행을 직접 수정한 뒤
 // 커밋(JSON)으로 다시 보낸다.
@@ -55,8 +86,10 @@ async function handlePreview(req: NextRequest, userId: number) {
   let rows;
   let skippedSheets;
   let blankRowsSkipped;
+  let mergedRowsCount;
   try {
-    ({ rows, matchedColumns, skippedSheets, blankRowsSkipped } = parseBuildingsWorkbook(buffer));
+    ({ rows, matchedColumns, skippedSheets, blankRowsSkipped, mergedRowsCount } =
+      parseBuildingsWorkbook(buffer));
   } catch (err) {
     const message = err instanceof ExcelParseError ? err.message : "엑셀 파일을 읽을 수 없습니다.";
     return NextResponse.json({ error: message }, { status: 400 });
@@ -72,10 +105,35 @@ async function handlePreview(req: NextRequest, userId: number) {
   const existingKeys = await getExistingDuplicateKeys(userId);
   const seenInFile = new Set<string>();
 
+  // 특급대상물로 추정되는 행들은 병렬로 건축물대장을 조회해서 실제 사용승인일을 확보한다.
+  const topTierDates = await Promise.all(
+    rows.map(async (row) => ({
+      key: `${row.sheetName}::${row.rowNumber}`,
+      date: await lookupTopTierApprovalDate(row),
+    }))
+  );
+  const topTierDateMap = new Map(
+    topTierDates.filter((r) => r.date != null).map((r) => [r.key, r.date as string])
+  );
+
   // 주소·연면적·사용승인일은 저장을 막지는 않지만(나중에 정부 데이터로 채울 수
   // 있으므로), 정보가 빠진 채로 조용히 "정상"으로 자동 등록되면 안 된다 - 사용자가
   // 직접 확인하고 체크해서 등록하도록 어떤 정보가 없는지 구체적으로 표시해준다.
-  const previewRows = rows.map((row) => {
+  const previewRows = rows.map((rawRow) => {
+    const topTierDate = topTierDateMap.get(`${rawRow.sheetName}::${rawRow.rowNumber}`);
+    // 특급대상물 추정 + 건축물대장 조회 성공 시, 엑셀 값 대신 정부 데이터의
+    // 사용승인일을 신뢰한다 (반복 점검월만 있던 경우도 정확한 날짜로 대체됨).
+    const row: ParsedBuildingRow = topTierDate
+      ? {
+          ...rawRow,
+          useApprovalDate: topTierDate,
+          recurringInspectionMonth: undefined,
+          notes: rawRow.notes
+            ? `${rawRow.notes} [특급대상물 추정 - 건축물대장에서 사용승인일 확인: ${topTierDate}]`
+            : `[특급대상물 추정 - 건축물대장에서 사용승인일 확인: ${topTierDate}]`,
+        }
+      : rawRow;
+
     const parsed = buildingSchema.safeParse(row);
 
     const missingFields: string[] = [];
@@ -111,7 +169,13 @@ async function handlePreview(req: NextRequest, userId: number) {
     };
   });
 
-  return NextResponse.json({ rows: previewRows, matchedColumns, skippedSheets, blankRowsSkipped });
+  return NextResponse.json({
+    rows: previewRows,
+    matchedColumns,
+    skippedSheets,
+    blankRowsSkipped,
+    mergedRowsCount,
+  });
 }
 
 const commitRequestSchema = z.object({

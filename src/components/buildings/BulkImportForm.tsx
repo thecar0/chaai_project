@@ -57,6 +57,7 @@ export default function BulkImportForm() {
   const [matchedColumns, setMatchedColumns] = useState<MatchedColumn[] | null>(null);
   const [skippedSheets, setSkippedSheets] = useState<SkippedSheet[] | null>(null);
   const [blankRowsSkipped, setBlankRowsSkipped] = useState(0);
+  const [mergedRowsCount, setMergedRowsCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   function resetOutputs() {
@@ -66,6 +67,7 @@ export default function BulkImportForm() {
     setMatchedColumns(null);
     setSkippedSheets(null);
     setBlankRowsSkipped(0);
+    setMergedRowsCount(0);
   }
 
   async function handlePreview() {
@@ -93,6 +95,7 @@ export default function BulkImportForm() {
     setMatchedColumns(data.matchedColumns);
     setSkippedSheets(data.skippedSheets);
     setBlankRowsSkipped(data.blankRowsSkipped ?? 0);
+    setMergedRowsCount(data.mergedRowsCount ?? 0);
   }
 
   async function handleCommit() {
@@ -261,6 +264,12 @@ export default function BulkImportForm() {
                   {" "}
                   · 정보 부족 {incompletePreviewRows.length}건은 기본적으로 선택 해제됨
                   (확인 후 체크하세요)
+                </span>
+              )}
+              {mergedRowsCount > 0 && (
+                <span className="text-silver-500">
+                  {" "}
+                  · 같은 건물의 종합/작동점검 행 {mergedRowsCount}개는 하나로 병합됨
                 </span>
               )}
               {blankRowsSkipped > 0 && (

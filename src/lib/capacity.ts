@@ -147,3 +147,27 @@ export function getScaleBasedComposition(input: {
   const isSpecialScale = (input.floorCount ?? 0) >= 50 || input.isPerformanceDesign === true;
   return isSpecialScale ? SCALE_BASED_COMPOSITION.special : SCALE_BASED_COMPOSITION.general;
 }
+
+// ── 특급 소방안전관리대상물 판정 (화재의 예방 및 안전관리에 관한 법률 시행령
+// 별표4 제1호) ──
+// 다음 중 하나에 해당하면 특급:
+//  - 아파트: 50층 이상(지하층 제외) 또는 지상높이 200m 이상
+//  - 아파트 아닌 특정소방대상물: 30층 이상(지하층 포함) 또는 지상높이 120m 이상
+//  - 위 두 경우에 해당하지 않는 대상물(아파트 제외): 연면적 10만㎡ 이상
+// 우리 스키마엔 "지상높이(m)"와 "지하층수"를 따로 저장하지 않으므로(지상 층수만
+// 있음), 그 두 조건은 판정에 반영할 수 없다 - 그래서 이 함수는 층수·연면적만으로
+// 판정하는 보수적 추정치다(실제로는 특급인데 이 조건들만으로는 못 걸러내는
+// 경우가 있을 수 있음). 공공기관 소방안전관리 특례 대상(정부청사 등) 제외 규정도
+// 판별할 데이터가 없어 반영하지 않는다.
+export function isLikelyTopTierBuilding(input: {
+  isApartment: boolean | null | undefined;
+  floorCount: number | null | undefined;
+  totalFloorAreaM2: number | null | undefined;
+}): boolean {
+  const floors = input.floorCount ?? 0;
+  if (input.isApartment) {
+    return floors >= 50;
+  }
+  if (floors >= 30) return true;
+  return (input.totalFloorAreaM2 ?? 0) >= 100000;
+}
