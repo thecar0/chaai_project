@@ -246,6 +246,7 @@ export async function POST(req: NextRequest) {
     return {
       date: day.date,
       usedRatio: day.usedRatio,
+      estimatedMinutes: day.estimatedMinutes,
       groups: Array.from(groupsMap.values()),
     };
   });

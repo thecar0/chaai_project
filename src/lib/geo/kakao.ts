@@ -36,11 +36,16 @@ export async function geocodeAddress(address: string): Promise<Coordinates | nul
   return { lat: Number(doc.y), lng: Number(doc.x) };
 }
 
-/** 두 좌표 간 실제 도로 기준 최단 주행거리(km)를 구한다. */
-export async function getDrivingDistanceKm(
+export type DrivingRoute = {
+  distanceKm: number;
+  durationMinutes: number; // 카카오모빌리티가 실시간 교통 반영해서 추정한 소요시간
+};
+
+/** 두 좌표 간 실제 도로 기준 최단 경로의 주행거리(km)와 예상 소요시간(분)을 구한다. */
+export async function getDrivingRoute(
   origin: Coordinates,
   destination: Coordinates
-): Promise<number | null> {
+): Promise<DrivingRoute | null> {
   const apiKey = getApiKey();
   const url = new URL("https://apis-navi.kakaomobility.com/v1/directions");
   url.searchParams.set("origin", `${origin.lng},${origin.lat}`);
@@ -58,7 +63,8 @@ export async function getDrivingDistanceKm(
   if (!route || route.result_code !== 0) return null;
 
   const distanceMeters: number | undefined = route.summary?.distance;
-  if (typeof distanceMeters !== "number") return null;
+  const durationSeconds: number | undefined = route.summary?.duration;
+  if (typeof distanceMeters !== "number" || typeof durationSeconds !== "number") return null;
 
-  return distanceMeters / 1000;
+  return { distanceKm: distanceMeters / 1000, durationMinutes: durationSeconds / 60 };
 }

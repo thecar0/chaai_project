@@ -33,6 +33,7 @@ type MergedGroup = {
 type MergedDay = {
   date: string;
   usedRatio: number;
+  estimatedMinutes: number;
   groups: MergedGroup[];
 };
 
@@ -49,6 +50,15 @@ function currentMonthValue() {
 
 function unitFor(category: Category) {
   return category === "apartment" ? "세대" : "㎡";
+}
+
+function formatMinutes(minutes: number) {
+  const rounded = Math.round(minutes);
+  const h = Math.floor(rounded / 60);
+  const m = rounded % 60;
+  if (h === 0) return `${m}분`;
+  if (m === 0) return `${h}시간`;
+  return `${h}시간 ${m}분`;
 }
 
 export default function ScheduleRunForm({
@@ -149,7 +159,10 @@ export default function ScheduleRunForm({
         </div>
         <p className="text-[11px] text-silver-400">
           그 달에 예정된 종합점검·작동점검·아파트 점검을 한 번에 배치합니다. 인원수를
-          바꿔서 다시 미리보기하면 배치가 새로 계산됩니다.
+          바꿔서 다시 미리보기하면 배치가 새로 계산됩니다. 법정 한도(면적·세대수)를
+          지키는 것과 별개로, 이동시간을 포함해 통상 근무시간(점심 제외 7시간) 안에
+          끝나는지도 함께 확인합니다 — 이 시간 기준은 참고치일 뿐 법적 기준은
+          아니며, 실제 소요시간은 건물 구조·설비 복잡도에 따라 달라질 수 있습니다.
         </p>
         {error && <p className="text-[13px] text-red-600">{error}</p>}
       </div>
@@ -201,8 +214,14 @@ export default function ScheduleRunForm({
               >
                 <div className="flex items-center justify-between border-b border-silver-200 px-5 py-2.5 text-[13px]">
                   <span className="font-medium">{day.date}</span>
-                  <span className="text-[11px] text-silver-500">
-                    오늘 인력 능력 {Math.round(day.usedRatio * 100)}% 사용
+                  <span className="flex items-center gap-2 text-[11px] text-silver-500">
+                    <span>오늘 인력 능력 {Math.round(day.usedRatio * 100)}% 사용</span>
+                    <span
+                      className="text-silver-400"
+                      title="법정 한도(면적·세대수)와는 별개로, 통상 근무시간(점심 제외 7시간) 기준 참고 소요시간입니다. 법적 기준이 아니며 실제 소요시간은 건물 구조·설비·이동시간에 따라 달라질 수 있습니다."
+                    >
+                      · 참고 소요시간 {formatMinutes(day.estimatedMinutes)}
+                    </span>
                   </span>
                 </div>
                 {day.groups.map((group) => {

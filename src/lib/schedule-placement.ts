@@ -1,5 +1,11 @@
-import { applyDistanceDegradation, calculateInspectionDays, type InspectionCategory } from "./capacity";
-import { getDrivingDistanceKm, type Coordinates } from "./geo/kakao";
+import {
+  applyDistanceDegradation,
+  calculateInspectionDays,
+  estimateWorkMinutes,
+  REFERENCE_WORK_MINUTES,
+  type InspectionCategory,
+} from "./capacity";
+import { getDrivingRoute, type Coordinates } from "./geo/kakao";
 
 export type PlacementBuilding = {
   buildingId: number;
@@ -25,7 +31,11 @@ export type PlacementDayItem = {
 export type PlacementDay = {
   date: string;
   items: PlacementDayItem[];
-  usedRatio: number; // 오늘 하루 능력 중 사용한 비율의 합 (0~1)
+  usedRatio: number; // 오늘 하루 능력(법정 한도) 중 사용한 비율의 합 (0~1)
+  // 참고용 예상 소요시간(이동시간 포함, 분) - 법정 기준 아님. 법정 한도를 다
+  // 채워도 이게 REFERENCE_WORK_MINUTES를 넘지 않는다는 보장은 아래 배치
+  // 로직이 별도로 확인한다(둘 다 만족해야 그 날에 들어간다).
+  estimatedMinutes: number;
 };
 
 export type PlacementResult = {
@@ -33,7 +43,11 @@ export type PlacementResult = {
   unplaced: (PlacementDayItem & { reason: string })[];
 };
 
-type DistanceFn = (a: Coordinates, b: Coordinates) => Promise<number | null>;
+type DistanceFn = (a: Coordinates, b: Coordinates) => Promise<{ distanceKm: number; durationMinutes: number } | null>;
+
+// 실제 경로를 못 구했을 때(API 실패 등) 직선거리로 대략 이동시간을 추정하는 데
+// 쓰는 참고용 평균 속도 - 법정 기준이 아니라 순전히 대략치 추정용이다.
+const FALLBACK_AVERAGE_SPEED_KMH = 30;
 
 /**
  * 대상 건물들을 하루 능력(=1, 100%) 안에서 최대한 채워 날짜별로 배치한다.
@@ -44,11 +58,20 @@ type DistanceFn = (a: Coordinates, b: Coordinates) => Promise<number | null>;
  * 대비 몇 %를 썼는지"(usageRatio = 실제 점검면적(세대수) ÷ 그 유형의 하루 한도)를
  * 계산해서, 하루 사용 비율의 합이 1(=100%)을 넘지 않게 배치한다.
  *
+ * 다만 법정 한도(면적·세대수 상한)와 "근무시간(점심 제외) 안에 실제로 끝나는지"는
+ * 서로 다른 문제다 - 법정 한도는 지키더라도 이동시간까지 더하면 하루 안에 못
+ * 끝날 수 있다. 그래서 법정 한도(usageRatio 합 ≤ 1)와는 별개로, 참고용
+ * 소요시간(작업시간 추정치 + 실제 이동시간)의 합이 REFERENCE_WORK_MINUTES(420분,
+ * 점심 제외 통상 가용시간)를 넘지 않는지도 같이 확인한다 - 둘 중 하나라도
+ * 넘으면 그 건은 오늘 못 들어간다. 이 시간 기준은 법령이 아니라 "법정 한도를
+ * 통상 가용시간 안에 다 쓴다"고 가정한 참고 페이스일 뿐이다.
+ *
  * - 혼자서도 하루 능력(비율 1)을 넘는 건물(점검일수 > 1)은 다른 건물과 묶지 않고
- *   단독으로 필요한 일수만큼 연속 배치한다.
+ *   단독으로 필요한 일수만큼 연속 배치한다 (이 경우 하루치 분량이 항상 법정
+ *   한도 이하이므로 참고 소요시간도 자동으로 420분 이하가 된다 - 별도 확인 불필요).
  * - 나머지는 그리디 최근접 방식으로 하루에 최대한 채운다(유형 상관없이 지리적으로
  *   가까운 순): 직선거리(하버사인)로 가장 가까운 후보를 먼저 추린 뒤, 그 후보에
- *   대해서만 실제 주행거리 API를 호출해 거리 감액을 적용한다.
+ *   대해서만 실제 주행거리·소요시간 API를 호출해 거리 감액과 시간 확인을 적용한다.
  * - endDate(선택한 달의 마지막 날)를 넘어가면 더 이상 배치하지 않고 unplaced로
  *   보고한다.
  */
@@ -61,7 +84,7 @@ export async function placeInspections(
   buildings: PlacementBuilding[],
   startDate: Date,
   endDate: Date,
-  getDistanceKm: DistanceFn = getDrivingDistanceKm
+  getRoute: DistanceFn = getDrivingRoute
 ): Promise<PlacementResult> {
   const days: PlacementDay[] = [];
   const unplaced: PlacementResult["unplaced"] = [];
@@ -87,16 +110,18 @@ export async function placeInspections(
       continue;
     }
     for (let i = 0; i < daysNeeded; i++) {
+      const dayRatio = b.usageRatio / daysNeeded;
       days.push({
         date: toDateString(cursor),
         items: [
           {
             ...toItem(b),
-            usageRatio: b.usageRatio / daysNeeded,
+            usageRatio: dayRatio,
             rawAmount: b.rawAmount / daysNeeded,
           },
         ],
         usedRatio: DAILY_CAPACITY,
+        estimatedMinutes: estimateWorkMinutes(dayRatio),
       });
       cursor = addDays(cursor, 1);
     }
@@ -114,11 +139,13 @@ export async function placeInspections(
 
     const dayItems: PlacementDayItem[] = [];
     let remainingCapacity = DAILY_CAPACITY;
+    let remainingMinutes = REFERENCE_WORK_MINUTES;
     let lastCoords: Coordinates | null = null;
 
     const first = remaining.shift()!;
     dayItems.push(toItem(first));
     remainingCapacity -= first.usageRatio;
+    remainingMinutes -= estimateWorkMinutes(first.usageRatio);
     lastCoords = first.coordinates ?? null;
 
     while (remaining.length > 0) {
@@ -136,16 +163,29 @@ export async function placeInspections(
 
       const candidate = remaining[nearestIdx];
       let distanceKm = 0;
+      let travelMinutes = 0;
       if (lastCoords && candidate.coordinates) {
-        distanceKm = (await getDistanceKm(lastCoords, candidate.coordinates)) ?? nearestHaversine;
+        const route = await getRoute(lastCoords, candidate.coordinates);
+        if (route) {
+          distanceKm = route.distanceKm;
+          travelMinutes = route.durationMinutes;
+        } else {
+          // 실제 경로를 못 구하면 직선거리 기준 평균 속도로 대략만 추정한다 (참고용).
+          distanceKm = nearestHaversine;
+          travelMinutes = (nearestHaversine / FALLBACK_AVERAGE_SPEED_KMH) * 60;
+        }
       }
 
       const degradedCapacity = applyDistanceDegradation(remainingCapacity, distanceKm);
-      if (candidate.usageRatio > degradedCapacity) break; // 오늘은 더 못 채움
+      const candidateMinutes = estimateWorkMinutes(candidate.usageRatio) + travelMinutes;
+      const exceedsLegalLimit = candidate.usageRatio > degradedCapacity;
+      const exceedsWorkHours = candidateMinutes > remainingMinutes;
+      if (exceedsLegalLimit || exceedsWorkHours) break; // 오늘은 더 못 채움
 
       remaining.splice(nearestIdx, 1);
       dayItems.push(toItem(candidate));
       remainingCapacity = degradedCapacity - candidate.usageRatio;
+      remainingMinutes -= candidateMinutes;
       lastCoords = candidate.coordinates ?? lastCoords;
     }
 
@@ -153,6 +193,7 @@ export async function placeInspections(
       date: toDateString(cursor),
       items: dayItems,
       usedRatio: DAILY_CAPACITY - remainingCapacity,
+      estimatedMinutes: REFERENCE_WORK_MINUTES - remainingMinutes,
     });
     cursor = addDays(cursor, 1);
   }
