@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { drivingDistances } from "@/db/schema";
 import { getDrivingRoute, type Coordinates, type DrivingRoute } from "./kakao";
@@ -45,4 +45,55 @@ export async function getCachedDrivingRoute(
     .onConflictDoNothing({ target: [drivingDistances.buildingIdA, drivingDistances.buildingIdB] });
 
   return route;
+}
+
+// 추천 인원수 탐색처럼 같은 건물 집합으로 배치를 여러 번 돌릴 때, 건물 쌍마다
+// 매번 DB를 왕복하지 않도록 관련된 캐시 값을 한 번에 메모리로 읽어온다.
+export async function preloadDrivingRoutes(
+  buildingIds: number[]
+): Promise<Map<string, DrivingRoute>> {
+  const map = new Map<string, DrivingRoute>();
+  if (buildingIds.length < 2) return map;
+
+  const rows = await db
+    .select()
+    .from(drivingDistances)
+    .where(
+      and(
+        inArray(drivingDistances.buildingIdA, buildingIds),
+        inArray(drivingDistances.buildingIdB, buildingIds)
+      )
+    );
+  for (const r of rows) {
+    map.set(`${r.buildingIdA}-${r.buildingIdB}`, {
+      distanceKm: r.distanceKm,
+      durationMinutes: r.durationMinutes,
+    });
+  }
+  return map;
+}
+
+// preload된 메모리 캐시를 우선 사용하고, 없는 쌍만 DB/API로 조회해 메모리에도
+// 채워 넣는 DistanceFn을 만든다 - 같은 요청 안에서 배치를 여러 번(인원수를
+// 바꿔가며) 돌려도 같은 쌍을 두 번 조회하지 않게 하기 위함이다.
+export function makeMemoizedDistanceFn(
+  preloaded: Map<string, DrivingRoute>
+): (
+  aBuildingId: number,
+  aCoords: Coordinates,
+  bBuildingId: number,
+  bCoords: Coordinates
+) => Promise<DrivingRoute | null> {
+  return async (aBuildingId, aCoords, bBuildingId, bCoords) => {
+    if (aBuildingId === bBuildingId) return { distanceKm: 0, durationMinutes: 0 };
+    const [idA, idB] =
+      aBuildingId < bBuildingId ? [aBuildingId, bBuildingId] : [bBuildingId, aBuildingId];
+    const key = `${idA}-${idB}`;
+    const cached = preloaded.get(key);
+    if (cached) return cached;
+
+    const route = await getCachedDrivingRoute(aBuildingId, aCoords, bBuildingId, bCoords);
+    if (route) preloaded.set(key, route);
+    return route;
+  };
 }

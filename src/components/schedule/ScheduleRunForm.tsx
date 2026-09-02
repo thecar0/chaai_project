@@ -39,8 +39,18 @@ type MergedDay = {
 
 type RunResult = {
   days: MergedDay[];
-  unplaced: { buildingId: number; inspectionId: number; name: string; reason: string; category: string }[];
+  unplaced: {
+    buildingId: number;
+    inspectionId: number;
+    name: string;
+    reason: string;
+    reasonCode: "capacity" | "invalid_amount";
+    category: string;
+  }[];
   warnings: string[];
+  // 인원 부족으로 못 들어간 게 있을 때만 계산됨 - 이번 달 안에 전부 배치되는 최소
+  // 인원수. 상한(200명)까지 찾아봐도 안 되면 null.
+  recommendedPersonnelCount: number | null;
 };
 
 function currentMonthValue() {
@@ -85,7 +95,11 @@ export default function ScheduleRunForm({
     dayCount: number;
   } | null>(null);
 
-  async function runPlacement() {
+  // count를 생략하면 현재 입력값(personnelCount)을 쓴다 - "추천 인원으로 다시
+  // 계산" 버튼처럼 state 반영을 기다리지 않고 바로 그 값으로 계산하고 싶을 때
+  // 명시적으로 넘긴다.
+  async function runPlacement(count?: number) {
+    const effectiveCount = count ?? personnelCount;
     setError(null);
     setLoading(true);
     setLastApplied(null);
@@ -93,7 +107,7 @@ export default function ScheduleRunForm({
     const res = await fetch("/api/schedule/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ month, personnelCount }),
+      body: JSON.stringify({ month, personnelCount: effectiveCount }),
     });
     const data = await res.json();
     setLoading(false);
@@ -103,7 +117,8 @@ export default function ScheduleRunForm({
       return;
     }
     setResult(data);
-    setResultPersonnelCount(personnelCount);
+    setResultPersonnelCount(effectiveCount);
+    setPersonnelCount(effectiveCount);
   }
 
   // 미리보기에서 이미 계산해둔 결과를 그대로 저장만 한다 - 배치를 처음부터
@@ -176,6 +191,8 @@ export default function ScheduleRunForm({
           지키는 것과 별개로, 이동시간을 포함해 통상 근무시간(점심 제외 7시간) 안에
           끝나는지도 함께 확인합니다 — 이 시간 기준은 참고치일 뿐 법적 기준은
           아니며, 실제 소요시간은 건물 구조·설비 복잡도에 따라 달라질 수 있습니다.
+          인원이 부족해 못 배치된 건물이 있으면 필요한 최소 인원수를 추천해주는데,
+          건물이 많은 달은 이 계산에 시간이 좀 걸릴 수 있습니다.
         </p>
         {error && <p className="text-[13px] text-red-600">{error}</p>}
         {lastApplied && (
@@ -329,6 +346,30 @@ export default function ScheduleRunForm({
                   </li>
                 ))}
               </ul>
+              {result.recommendedPersonnelCount != null && (
+                <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-[#f5d4d1] pt-3">
+                  <p className="text-[#8a1f18]">
+                    이번 달 안에 전부 배치하려면 최소 약{" "}
+                    <span className="font-semibold">{result.recommendedPersonnelCount}명</span>이
+                    필요합니다 (참고용 추정치 - 실시간 교통 상황 반영으로 계산할 때마다
+                    1명 정도 달라질 수 있습니다).
+                  </p>
+                  <button
+                    onClick={() => runPlacement(result.recommendedPersonnelCount!)}
+                    disabled={loading}
+                    className="shrink-0 rounded-lg bg-[#d70015] px-3 py-1.5 text-[12px] font-medium text-white transition-all duration-150 hover:bg-[#b8000f] active:scale-[0.98] disabled:opacity-50"
+                  >
+                    {result.recommendedPersonnelCount}명으로 다시 계산
+                  </button>
+                </div>
+              )}
+              {result.recommendedPersonnelCount == null &&
+                result.unplaced.some((u) => u.reasonCode === "capacity") && (
+                  <p className="mt-3 border-t border-[#f5d4d1] pt-3 text-[#8a1f18]">
+                    인원을 크게 늘려도(200명까지 확인) 이번 달 안에 전부 배치하기 어렵습니다 -
+                    일부를 다음 달로 넘기는 걸 권장합니다.
+                  </p>
+                )}
             </div>
           )}
         </>

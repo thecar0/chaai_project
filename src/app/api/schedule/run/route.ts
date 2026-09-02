@@ -13,10 +13,12 @@ import {
   type InspectionCategory,
 } from "@/lib/capacity";
 import { geocodeAddress, KakaoApiError, type Coordinates } from "@/lib/geo/kakao";
+import { preloadDrivingRoutes, makeMemoizedDistanceFn } from "@/lib/geo/distance-cache";
 import {
   placeInspections,
   type PlacementBuilding,
   type PlacementDayItem,
+  type PlacementResult,
 } from "@/lib/schedule-placement";
 
 const runSchema = z.object({
@@ -31,18 +33,27 @@ const CATEGORY_LABEL: Record<InspectionCategory, string> = {
   apartment: "아파트",
 };
 
-// 종합점검 8,000㎡ / 작동점검 10,000㎡ / 아파트 250세대는 "같은 하루치 능력을 서로
-// 다른 기준으로 표현한 것"이다. 그래서 한 카테고리씩 따로 배치하지 않고, 이 함수는
-// 그 카테고리의 대상들을 "usageRatio(= 실제 점검면적(세대수) ÷ 그 유형의 하루 한도)"로
-// 환산만 해서 돌려준다 - 실제 배치(하루 능력을 넘지 않게 채우기)는 세 카테고리를
-// 전부 합친 뒤 한 번에 한다 (POST 핸들러 참고).
-async function collectCategoryBuildings(
+// usageRatio(그 유형의 하루 한도 대비 사용 비율)는 인원수(dailyLimit)에 따라
+// 달라지므로, DB 조회·지오코딩처럼 인원수와 무관하게 한 번만 하면 되는 작업과
+// 분리했다 - 추천 인원수를 찾을 때 인원수를 바꿔가며 배치를 여러 번 돌려야
+// 하는데, 그때마다 DB/지오코딩을 다시 하면 느려진다(RawCategoryBuilding을 한 번만
+// 모아두고 toPlacementBuildings로 인원수별 usageRatio만 다시 계산한다).
+type RawCategoryBuilding = {
+  inspectionId: number;
+  buildingId: number;
+  name: string;
+  inspectionType: "comprehensive" | "operational";
+  category: InspectionCategory;
+  rawAmount: number;
+  coordinates: Coordinates | null;
+};
+
+async function collectCategoryRawBuildings(
   session: SessionPayload,
   category: InspectionCategory,
   monthStart: string,
-  monthEnd: string,
-  dailyLimit: number
-): Promise<{ placementBuildings: PlacementBuilding[]; warnings: string[]; found: boolean }> {
+  monthEnd: string
+): Promise<{ rawBuildings: RawCategoryBuilding[]; warnings: string[]; found: boolean }> {
   const isGeneralBuilding = or(eq(buildings.isApartment, false), isNull(buildings.isApartment));
   // 사용자가 날짜를 직접 지정(이월)한 건은 자동 배치 대상에서 제외한다.
   const notManuallyScheduled = eq(inspectionSchedules.isManuallyScheduled, false);
@@ -120,8 +131,8 @@ async function collectCategoryBuildings(
 
   // 2단계: 좌표 확보(캐시 없는 건 지오코딩 API 호출) - 건물마다 독립적이라 병렬로 처리한다.
   // 예전엔 한 건씩 순서대로 기다려서, 건물이 많을수록 배치 미리보기가 느려지는 원인이었다.
-  const placementBuildings = await Promise.all(
-    prepared.map(async ({ row, rawAmount }): Promise<PlacementBuilding> => {
+  const rawBuildings = await Promise.all(
+    prepared.map(async ({ row, rawAmount }): Promise<RawCategoryBuilding> => {
       let coordinates: Coordinates | null = null;
       if (row.latitude != null && row.longitude != null) {
         coordinates = { lat: row.latitude, lng: row.longitude };
@@ -146,13 +157,68 @@ async function collectCategoryBuildings(
         inspectionType: row.inspectionType,
         category,
         rawAmount,
-        usageRatio: rawAmount / dailyLimit,
         coordinates,
       };
     })
   );
 
-  return { placementBuildings, warnings, found: rows.length > 0 };
+  return { rawBuildings, warnings, found: rows.length > 0 };
+}
+
+function toPlacementBuildings(
+  rawBuildings: RawCategoryBuilding[],
+  dailyLimits: Record<InspectionCategory, number>
+): PlacementBuilding[] {
+  return rawBuildings.map((b) => ({
+    buildingId: b.buildingId,
+    inspectionId: b.inspectionId,
+    name: b.name,
+    inspectionType: b.inspectionType,
+    category: b.category,
+    rawAmount: b.rawAmount,
+    usageRatio: b.rawAmount / dailyLimits[b.category],
+    coordinates: b.coordinates,
+  }));
+}
+
+// 아무리 인원을 늘려도 무한정 탐색하지 않도록 잡아둔 상한. 인원 1명 늘 때마다
+// 하루 한도가 크게 늘어나는 계산식이라(예: 종합점검 +2,000㎡), 실무에서 이 상한까지
+// 갈 일은 거의 없다 - 그래도 도달하면 "이 정도로도 어려움"으로 보고한다.
+const MAX_PERSONNEL_SEARCH = 200;
+
+// 요청한 인원수로는 이번 달 안에 다 못 들어갈 때, 다 들어가는 최소 인원수를
+// 찾는다. 인원이 늘수록 하루 한도(dailyLimit)가 커져서 usageRatio가 줄고, 참고
+// 소요시간도 같이 줄어들므로 "인원이 늘면 배치가 더 잘 된다"는 단조성이 성립한다
+// - 그래서 지수 탐색으로 성립하는 상한을 먼저 찾고 이분탐색으로 좁힌다. 데이터
+// 문제(usageRatio<=0)로 못 들어간 건은 인원을 늘려도 해결되지 않으므로, "다
+// 들어갔다"는 판정에서는 capacity 사유만 확인한다.
+async function findMinimumPersonnelForFullPlacement(
+  from: number,
+  runPlacement: (
+    n: number
+  ) => Promise<{ result: PlacementResult; dailyLimits: Record<InspectionCategory, number> }>
+): Promise<number | null> {
+  async function fits(n: number): Promise<boolean> {
+    const { result } = await runPlacement(n);
+    return !result.unplaced.some((u) => u.reasonCode === "capacity");
+  }
+
+  let lo = from; // from은 이미 capacity 부족이 확인된 상태로 호출됨
+  let hi = from + 1;
+  while (hi <= MAX_PERSONNEL_SEARCH && !(await fits(hi))) {
+    lo = hi;
+    hi = hi * 2;
+  }
+  if (hi > MAX_PERSONNEL_SEARCH) {
+    return (await fits(MAX_PERSONNEL_SEARCH)) ? MAX_PERSONNEL_SEARCH : null;
+  }
+
+  while (lo + 1 < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (await fits(mid)) hi = mid;
+    else lo = mid;
+  }
+  return hi;
 }
 
 export async function POST(req: NextRequest) {
@@ -172,8 +238,7 @@ export async function POST(req: NextRequest) {
   const monthStart = `${month}-01`;
   const monthEnd = `${month}-${String(new Date(year, monthNum, 0).getDate()).padStart(2, "0")}`;
 
-  const dailyLimits = {} as Record<InspectionCategory, number>;
-  const allPlacementBuildings: PlacementBuilding[] = [];
+  const allRawBuildings: RawCategoryBuilding[] = [];
   const allWarnings: string[] = [];
   let anyFound = false;
 
@@ -181,22 +246,14 @@ export async function POST(req: NextRequest) {
     // 세 카테고리는 서로 독립적인 조회+지오코딩이라 병렬로 처리한다 (예전엔
     // 순서대로 기다려서 카테고리 수만큼 느려졌었다).
     const categoryResults = await Promise.all(
-      CATEGORIES.map(async (category) => {
-        const dailyLimit = getDailyLimit(personnelCount, category);
-        const result = await collectCategoryBuildings(session, category, monthStart, monthEnd, dailyLimit);
-        return { category, dailyLimit, ...result };
-      })
+      CATEGORIES.map((category) => collectCategoryRawBuildings(session, category, monthStart, monthEnd))
     );
     for (const r of categoryResults) {
-      dailyLimits[r.category] = r.dailyLimit;
-      allPlacementBuildings.push(...r.placementBuildings);
+      allRawBuildings.push(...r.rawBuildings);
       allWarnings.push(...r.warnings);
       if (r.found) anyFound = true;
     }
   } catch (err) {
-    if (err instanceof CapacityRuleError) {
-      return NextResponse.json({ error: err.message }, { status: 400 });
-    }
     if (err instanceof KakaoApiError) {
       return NextResponse.json({ error: err.message }, { status: 502 });
     }
@@ -210,9 +267,27 @@ export async function POST(req: NextRequest) {
   const startDate = new Date(year, monthNum - 1, 1);
   const endDate = new Date(year, monthNum, 0); // 선택한 달의 마지막 날
 
-  let placement;
+  // 추천 인원수 탐색처럼 인원수를 바꿔가며 배치를 여러 번 돌릴 수 있으므로, 건물
+  // 쌍 거리를 매번 DB에서 다시 읽지 않도록 이번 요청 동안 메모리에 캐시해서 쓴다.
+  const routeCache = await preloadDrivingRoutes(allRawBuildings.map((b) => b.buildingId));
+  const getRoute = makeMemoizedDistanceFn(routeCache);
+
+  function dailyLimitsFor(n: number): Record<InspectionCategory, number> {
+    const limits = {} as Record<InspectionCategory, number>;
+    for (const category of CATEGORIES) limits[category] = getDailyLimit(n, category);
+    return limits;
+  }
+
+  async function runPlacement(n: number): Promise<{ result: PlacementResult; dailyLimits: Record<InspectionCategory, number> }> {
+    const limits = dailyLimitsFor(n);
+    const result = await placeInspections(toPlacementBuildings(allRawBuildings, limits), startDate, endDate, getRoute);
+    return { result, dailyLimits: limits };
+  }
+
+  let dailyLimits: Record<InspectionCategory, number>;
+  let placement: PlacementResult;
   try {
-    placement = await placeInspections(allPlacementBuildings, startDate, endDate);
+    ({ result: placement, dailyLimits } = await runPlacement(personnelCount));
   } catch (err) {
     if (err instanceof CapacityRuleError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
@@ -221,6 +296,18 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: err.message }, { status: 502 });
     }
     throw err;
+  }
+
+  // 인원 부족(capacity)으로 못 들어간 게 있으면, 인원을 늘려서 다 들어가는 최소
+  // 인원을 찾아본다. 데이터 문제(usageRatio<=0)로 못 들어간 건 인원을 늘려도
+  // 해결되지 않으므로 탐색 대상에서 제외한다.
+  let recommendedPersonnelCount: number | null = null;
+  const hasCapacityUnplaced = placement.unplaced.some((u) => u.reasonCode === "capacity");
+  if (hasCapacityUnplaced) {
+    recommendedPersonnelCount = await findMinimumPersonnelForFullPlacement(
+      personnelCount,
+      runPlacement
+    );
   }
 
   // 실제 배치는 유형과 무관하게 하루 능력(비율 1) 기준으로 이미 끝났다. 아래는
@@ -256,6 +343,7 @@ export async function POST(req: NextRequest) {
     inspectionId: u.inspectionId,
     name: u.name,
     reason: u.reason,
+    reasonCode: u.reasonCode,
     category: CATEGORY_LABEL[u.category],
   }));
 
@@ -265,5 +353,6 @@ export async function POST(req: NextRequest) {
     days,
     unplaced,
     warnings: allWarnings,
+    recommendedPersonnelCount,
   });
 }

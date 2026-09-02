@@ -39,9 +39,11 @@ export type PlacementDay = {
   estimatedMinutes: number;
 };
 
+export type UnplacedReasonCode = "capacity" | "invalid_amount";
+
 export type PlacementResult = {
   days: PlacementDay[];
-  unplaced: (PlacementDayItem & { reason: string })[];
+  unplaced: (PlacementDayItem & { reason: string; reasonCode: UnplacedReasonCode })[];
 };
 
 type DistanceFn = (
@@ -128,7 +130,11 @@ export async function placeInspections(
 
   for (const b of buildings) {
     if (b.usageRatio <= 0) {
-      unplaced.push({ ...toItem(b), reason: "점검면적(세대수) 산출값이 0 이하입니다." });
+      unplaced.push({
+        ...toItem(b),
+        reason: "점검면적(세대수) 산출값이 0 이하입니다.",
+        reasonCode: "invalid_amount",
+      });
       continue;
     }
     const daysNeeded = calculateInspectionDays(b.usageRatio, DAILY_CAPACITY);
@@ -139,7 +145,7 @@ export async function placeInspections(
   for (const b of soloPool) {
     const daysNeeded = calculateInspectionDays(b.usageRatio, DAILY_CAPACITY);
     if (weekdayAfterSteps(cursor, daysNeeded - 1) > endDate) {
-      unplaced.push({ ...toItem(b), reason: MONTH_OVERFLOW_REASON });
+      unplaced.push({ ...toItem(b), reason: MONTH_OVERFLOW_REASON, reasonCode: "capacity" });
       continue;
     }
     for (let i = 0; i < daysNeeded; i++) {
@@ -165,7 +171,7 @@ export async function placeInspections(
   while (remaining.length > 0) {
     if (cursor > endDate) {
       for (const b of remaining) {
-        unplaced.push({ ...toItem(b), reason: MONTH_OVERFLOW_REASON });
+        unplaced.push({ ...toItem(b), reason: MONTH_OVERFLOW_REASON, reasonCode: "capacity" });
       }
       break;
     }
