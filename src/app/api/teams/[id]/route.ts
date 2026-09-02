@@ -9,6 +9,8 @@ async function getOwnedTeam(userId: number, id: number) {
   return db.query.teams.findFirst({ where: and(eq(teams.id, id), eq(teams.userId, userId)) });
 }
 
+const teamPatchSchema = teamSchema.partial();
+
 export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSession();
   if (!session) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -17,14 +19,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
   if (!team) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   const body = await req.json().catch(() => ({}));
-  const parsed = teamSchema.safeParse(body);
+  const parsed = teamPatchSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+  if (parsed.data.name === undefined && parsed.data.personnelCount === undefined) {
+    return NextResponse.json({ error: "변경할 값이 없습니다." }, { status: 400 });
   }
 
   const [updated] = await db
     .update(teams)
-    .set({ name: parsed.data.name })
+    .set({
+      ...(parsed.data.name !== undefined ? { name: parsed.data.name } : {}),
+      ...(parsed.data.personnelCount !== undefined
+        ? { personnelCount: parsed.data.personnelCount }
+        : {}),
+    })
     .where(eq(teams.id, team.id))
     .returning();
 

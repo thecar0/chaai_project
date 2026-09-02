@@ -51,6 +51,9 @@ export const teams = pgTable(
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
     name: varchar("name", { length: 100 }).notNull(),
+    // 이 팀의 기본 기술인력 인원수 - 배치 계산의 하루 한도 산정에 쓰인다. 매번
+    // 입력하지 않아도 되도록 팀 관리에서 한 번 정해두고 배치 때는 이 값을 쓴다.
+    personnelCount: integer("personnel_count").default(3).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({

@@ -11,6 +11,7 @@ export default async function TeamsPage() {
         .select({
           id: teams.id,
           name: teams.name,
+          personnelCount: teams.personnelCount,
           buildingCount: sql<number>`count(${buildings.id})::int`,
         })
         .from(teams)
@@ -33,8 +34,8 @@ export default async function TeamsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">팀 관리</h1>
         <p className="mt-1 max-w-xl text-[13px] text-silver-500">
           건물이 많아지면 인원을 소규모 팀으로 나눠 담당 건물만 따로 배치하는 게
-          효율적입니다. 여기서 팀을 만들고, 건축물 목록에서 건물마다 담당 팀을
-          지정하세요.
+          효율적입니다. 꼭 특정 팀이 맡아야 하는 건물만 건축물 목록에서 담당 팀으로
+          지정하고, 나머지는 배치할 때 거리 기준으로 자동으로 나눠 배치됩니다.
         </p>
       </div>
       <TeamManager initialTeams={rows} unassignedCount={unassigned?.count ?? 0} />

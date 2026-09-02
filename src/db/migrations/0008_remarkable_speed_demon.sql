@@ -1,0 +1,1 @@
+ALTER TABLE "teams" ADD COLUMN "personnel_count" integer DEFAULT 3 NOT NULL;

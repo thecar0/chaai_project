@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { and, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
-import { buildings, inspectionSchedules } from "@/db/schema";
+import { buildings, inspectionSchedules, teams } from "@/db/schema";
 import { getSession } from "@/lib/session";
 
 // "미리보기"에서 이미 계산해둔 날짜별 배치 결과를 그대로 저장만 한다. 여기서
@@ -18,6 +18,12 @@ const applySchema = z.object({
       })
     )
     .min(1, "적용할 배치 결과가 없습니다"),
+  // 미리보기 때 거리 기준으로 자동 배정됐던 미배정 건물들 - 적용 시점에 실제로
+  // buildings.teamId를 채워서 이후에는 "고정 담당"으로 취급되게 한다(매달 다른
+  // 팀으로 왔다갔다 하지 않도록).
+  teamAssignments: z
+    .array(z.object({ buildingId: z.number().int().positive(), teamId: z.number().int().positive() }))
+    .optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -50,6 +56,32 @@ export async function POST(req: NextRequest) {
         .where(inArray(inspectionSchedules.id, ids));
     })
   );
+
+  if (parsed.data.teamAssignments && parsed.data.teamAssignments.length > 0) {
+    const teamIds = [...new Set(parsed.data.teamAssignments.map((a) => a.teamId))];
+    const ownedTeams = await db
+      .select({ id: teams.id })
+      .from(teams)
+      .where(and(eq(teams.userId, session.userId), inArray(teams.id, teamIds)));
+    const ownedTeamIds = new Set(ownedTeams.map((t) => t.id));
+
+    const byTeam = new Map<number, number[]>();
+    for (const a of parsed.data.teamAssignments) {
+      if (!ownedTeamIds.has(a.teamId)) continue;
+      const list = byTeam.get(a.teamId) ?? [];
+      list.push(a.buildingId);
+      byTeam.set(a.teamId, list);
+    }
+
+    await Promise.all(
+      Array.from(byTeam.entries()).map(([teamId, buildingIds]) =>
+        db
+          .update(buildings)
+          .set({ teamId })
+          .where(and(eq(buildings.userId, session.userId), inArray(buildings.id, buildingIds)))
+      )
+    );
+  }
 
   return NextResponse.json({ applied: true });
 }

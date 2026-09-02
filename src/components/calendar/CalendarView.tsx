@@ -31,7 +31,7 @@ type Inspection = {
   teamName: string | null;
 };
 
-type Team = { id: number; name: string };
+type Team = { id: number; name: string; personnelCount: number };
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 const PAGE_SIZE = 8; // 사이드 목록 한 페이지당 표시 개수 (달력 세로 길이에 맞춘 값)
@@ -208,6 +208,7 @@ export default function CalendarView() {
               onApplied={loadInspections}
               teamId={selectedTeamId}
               teamLabel={selectedTeamLabel}
+              teamPersonnelCount={teams.find((t) => t.id === selectedTeamId)?.personnelCount}
             />
           )}
 
@@ -233,7 +234,13 @@ export default function CalendarView() {
                 </button>
                 <button
                   onClick={() => setShowPlacement((v) => !v)}
-                  className={`rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-all duration-150 active:scale-[0.98] ${
+                  disabled={teamFilter === "unassigned"}
+                  title={
+                    teamFilter === "unassigned"
+                      ? "미배정 탭에서는 배치를 실행할 수 없습니다 - 팀을 먼저 선택하세요."
+                      : undefined
+                  }
+                  className={`rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-all duration-150 active:scale-[0.98] disabled:opacity-40 ${
                     showPlacement
                       ? "bg-ink text-white"
                       : "border border-silver-300 bg-white text-ink hover:border-accent-500 hover:text-accent-600"

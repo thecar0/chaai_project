@@ -13,6 +13,7 @@ export async function GET() {
     .select({
       id: teams.id,
       name: teams.name,
+      personnelCount: teams.personnelCount,
       createdAt: teams.createdAt,
       buildingCount: sql<number>`count(${buildings.id})::int`,
     })
@@ -37,7 +38,11 @@ export async function POST(req: NextRequest) {
 
   const [team] = await db
     .insert(teams)
-    .values({ userId: session.userId, name: parsed.data.name })
+    .values({
+      userId: session.userId,
+      name: parsed.data.name,
+      personnelCount: parsed.data.personnelCount ?? 3,
+    })
     .returning();
 
   return NextResponse.json({ team }, { status: 201 });

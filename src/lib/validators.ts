@@ -20,6 +20,7 @@ export const loginSchema = z.object({
 // 만들어지지 않는다 - create-building.ts 참고).
 export const teamSchema = z.object({
   name: z.string().min(1, "팀 이름을 입력하세요").max(100, "팀 이름이 너무 깁니다(100자 이내)"),
+  personnelCount: z.number().int().min(3, "기술인력은 최소 3명부터 계산됩니다").optional(),
 });
 
 export const buildingSchema = z.object({

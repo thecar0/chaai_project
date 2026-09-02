@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
-type Team = { id: number; name: string; buildingCount: number };
+type Team = { id: number; name: string; personnelCount: number; buildingCount: number };
 
 export default function TeamManager({
   initialTeams,
@@ -16,9 +16,11 @@ export default function TeamManager({
   const router = useRouter();
   const [teams, setTeams] = useState(initialTeams);
   const [newName, setNewName] = useState("");
+  const [newPersonnelCount, setNewPersonnelCount] = useState(3);
   const [creating, setCreating] = useState(false);
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState("");
+  const [savingPersonnelId, setSavingPersonnelId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function handleCreate(e: React.FormEvent) {
@@ -30,7 +32,7 @@ export default function TeamManager({
     const res = await fetch("/api/teams", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newName.trim() }),
+      body: JSON.stringify({ name: newName.trim(), personnelCount: newPersonnelCount }),
     });
     const data = await res.json();
     setCreating(false);
@@ -41,6 +43,7 @@ export default function TeamManager({
     }
     setTeams((prev) => [...prev, { ...data.team, buildingCount: 0 }]);
     setNewName("");
+    setNewPersonnelCount(3);
   }
 
   async function handleRename(id: number) {
@@ -60,6 +63,28 @@ export default function TeamManager({
     }
     setTeams((prev) => prev.map((t) => (t.id === id ? { ...t, name: data.team.name } : t)));
     setRenamingId(null);
+  }
+
+  async function handlePersonnelChange(id: number, value: number) {
+    if (!Number.isInteger(value) || value < 3) return;
+    setSavingPersonnelId(id);
+    setError(null);
+
+    const res = await fetch(`/api/teams/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ personnelCount: value }),
+    });
+    const data = await res.json();
+    setSavingPersonnelId(null);
+
+    if (!res.ok) {
+      setError(typeof data.error === "string" ? data.error : "인원수 변경에 실패했습니다.");
+      return;
+    }
+    setTeams((prev) =>
+      prev.map((t) => (t.id === id ? { ...t, personnelCount: data.team.personnelCount } : t))
+    );
   }
 
   async function handleDelete(team: Team) {
@@ -86,14 +111,24 @@ export default function TeamManager({
     <div className="flex flex-col gap-5">
       <form
         onSubmit={handleCreate}
-        className="flex items-center gap-2 rounded-2xl border border-silver-300/70 bg-white p-5 shadow-sm"
+        className="flex flex-wrap items-center gap-2 rounded-2xl border border-silver-300/70 bg-white p-5 shadow-sm"
       >
         <input
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           placeholder="새 팀 이름 (예: 1팀)"
-          className="flex-1 rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
+          className="min-w-0 flex-1 rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
         />
+        <label className="flex shrink-0 items-center gap-2 text-[13px] text-silver-500">
+          인원수
+          <input
+            type="number"
+            min={3}
+            value={newPersonnelCount}
+            onChange={(e) => setNewPersonnelCount(Number(e.target.value))}
+            className="w-20 rounded-lg border border-silver-300 bg-silver-50 px-2.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
+          />
+        </label>
         <button
           type="submit"
           disabled={creating || !newName.trim()}
@@ -115,7 +150,8 @@ export default function TeamManager({
             <thead>
               <tr className="border-b border-silver-200 text-left text-[12px] text-silver-500">
                 <th className="px-5 py-3 font-medium">팀 이름</th>
-                <th className="px-5 py-3 font-medium">담당 건물 수</th>
+                <th className="px-5 py-3 font-medium">인원수</th>
+                <th className="px-5 py-3 font-medium">담당(고정) 건물 수</th>
                 <th className="px-5 py-3 font-medium">작업</th>
               </tr>
             </thead>
@@ -136,6 +172,21 @@ export default function TeamManager({
                     ) : (
                       team.name
                     )}
+                  </td>
+                  <td className="px-5 py-3 text-graphite">
+                    <input
+                      type="number"
+                      min={3}
+                      defaultValue={team.personnelCount}
+                      key={team.personnelCount}
+                      onBlur={(e) => {
+                        const v = Number(e.target.value);
+                        if (v !== team.personnelCount) handlePersonnelChange(team.id, v);
+                      }}
+                      disabled={savingPersonnelId === team.id}
+                      className="w-16 rounded-lg border border-silver-300 bg-white px-2 py-1 text-sm outline-none focus:border-accent-500 focus:ring-4 focus:ring-accent-500/10"
+                    />
+                    명
                   </td>
                   <td className="px-5 py-3 text-graphite">
                     <Link
@@ -189,6 +240,12 @@ export default function TeamManager({
           </table>
         )}
       </div>
+
+      <p className="text-[12px] text-silver-400">
+        배치 실행 시, 위에서 담당(고정)으로 지정한 건물은 반드시 그 팀에 들어가고, 나머지
+        미배정 건물은 각 팀의 담당 건물과 가까운 곳부터 자동으로 나눠 배치됩니다. 팀마다
+        기준이 될 건물을 최소 1개 이상 지정해야 자동 배정이 동작합니다.
+      </p>
 
       {unassignedCount > 0 && (
         <p className="text-[12px] text-silver-500">

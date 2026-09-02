@@ -51,6 +51,11 @@ type RunResult = {
   // 인원 부족으로 못 들어간 게 있을 때만 계산됨 - 이번 달 안에 전부 배치되는 최소
   // 인원수. 상한(200명)까지 찾아봐도 안 되면 null.
   recommendedPersonnelCount: number | null;
+  // 팀 탭에서 배치할 때만 채워짐 - 원래 미배정이었는데 거리 기준으로 이 팀에
+  // 자동으로 붙은 건물 id들. "적용"하면 이 건물들의 담당 팀이 실제로 저장된다.
+  autoAssignedBuildingIds: number[];
+  // 좌표가 없거나 어느 팀도 기준점이 없어서 자동 배정을 못 한 미배정 건물들.
+  unassignableBuildings: { buildingId: number; name: string }[];
 };
 
 function currentMonthValue() {
@@ -76,16 +81,20 @@ export default function ScheduleRunForm({
   onApplied,
   teamId,
   teamLabel,
+  teamPersonnelCount,
 }: {
   initialMonth?: string;
   onApplied?: () => void;
   // 없으면(전체) 팀 구분 없이 지금까지처럼 모든 건물을 대상으로 배치한다.
   teamId?: number;
   teamLabel?: string;
+  // 팀 관리에서 정해둔 이 팀의 기본 인원수 - 입력칸 초기값으로만 쓰고, 필요하면
+  // 이번만 다르게 바꿔서 계산해볼 수 있다.
+  teamPersonnelCount?: number;
 }) {
   const router = useRouter();
   const [month, setMonth] = useState(initialMonth ?? currentMonthValue());
-  const [personnelCount, setPersonnelCount] = useState(3);
+  const [personnelCount, setPersonnelCount] = useState(teamPersonnelCount ?? 3);
   const [loading, setLoading] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -142,6 +151,10 @@ export default function ScheduleRunForm({
           date: day.date,
           inspectionIds: day.groups.flatMap((group) => group.items.map((item) => item.inspectionId)),
         })),
+        teamAssignments:
+          teamId != null
+            ? result.autoAssignedBuildingIds.map((buildingId) => ({ buildingId, teamId }))
+            : undefined,
       }),
     });
     const data = await res.json();
@@ -251,6 +264,9 @@ export default function ScheduleRunForm({
           <div className="flex items-center justify-between rounded-xl bg-silver-200 px-4 py-2.5 text-[13px]">
             <span className="text-graphite">
               총 {result.days.length}일 배치 · 인원 {resultPersonnelCount}명 기준
+              {teamId != null && result.autoAssignedBuildingIds.length > 0 && (
+                <> · 미배정 건물 중 {result.autoAssignedBuildingIds.length}건이 거리 기준으로 자동 포함됨</>
+              )}
             </span>
             <button
               onClick={() => applyResult()}
@@ -260,6 +276,24 @@ export default function ScheduleRunForm({
               {applying ? "적용 중..." : "이대로 적용"}
             </button>
           </div>
+
+          {teamId != null && result.unassignableBuildings.length > 0 && (
+            <div className="rounded-2xl border border-[#fdeceb] bg-[#fdeceb]/40 p-5 text-[13px]">
+              <p className="mb-1 font-medium text-[#d70015]">
+                자동 배정하지 못한 미배정 건물 {result.unassignableBuildings.length}건
+              </p>
+              <p className="mb-2 text-[#8a1f18]">
+                주소가 없거나(좌표를 못 구함), 어느 팀에도 담당(고정) 건물이 없어서 거리
+                기준을 잡을 수 없었습니다. 팀 관리에서 각 팀에 기준 건물을 최소 1개
+                지정하거나, 아래 건물의 주소를 채워주세요.
+              </p>
+              <ul className="flex flex-col gap-1 text-[#8a1f18]">
+                {result.unassignableBuildings.map((b) => (
+                  <li key={b.buildingId}>{b.name}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="flex flex-col gap-3">
             {result.days.map((day) => (
