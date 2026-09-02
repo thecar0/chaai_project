@@ -1,4 +1,5 @@
 import type { RegistryLookupParams } from "./juso";
+import { withOneRetry } from "./retry";
 
 // 국토교통부 건축HUB 건축물대장정보 서비스(BldRgstHubService) - 표제부 조회.
 // https://www.data.go.kr 에서 "건축HUB_건축물대장정보 서비스" 검색 후 활용신청하면 키 발급.
@@ -47,12 +48,13 @@ export async function fetchBuildingRegistry(
   });
   const url = `${REGISTRY_ENDPOINT}?serviceKey=${apiKey}&${otherParams.toString()}`;
 
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new BuildingRegistryApiError(`건축물대장 API 호출 실패: HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
+  const data = await withOneRetry(async () => {
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new BuildingRegistryApiError(`건축물대장 API 호출 실패: HTTP ${res.status}`);
+    }
+    return res.json();
+  });
   const header = data?.response?.header;
   if (header?.resultCode && header.resultCode !== "00") {
     throw new BuildingRegistryApiError(

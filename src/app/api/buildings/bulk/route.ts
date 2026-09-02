@@ -46,27 +46,18 @@ async function getExistingDuplicateKeys(userId: number): Promise<Set<string>> {
 // 중요하다 - 엑셀 값을 그대로 믿지 않고, 건축물대장에서 실제 사용승인일을
 // 조회해서 덮어쓴다. 조회에 실패해도(주소 불명, API 오류, 대장 없음 등) 가져오기
 // 자체는 막지 않고 원래 값을 그대로 둔다 - 어디까지나 정확도를 높이는 보정이지
-// 필수 검증 단계는 아니다. 정부 API(juso.go.kr/data.go.kr)가 순간적으로
-// 불안정할 때가 있어(관찰됨: 동일 요청이 직후 재시도 시 성공), 실패 시 한 번만
-// 재시도한다.
-async function lookupTopTierApprovalDateOnce(row: ParsedBuildingRow): Promise<string | null> {
-  const registryParams = await lookupAddressForRegistry(row.address!);
-  if (!registryParams) return null;
-  const registry = await fetchBuildingRegistry(registryParams);
-  return registry?.useApprovalDate ?? null;
-}
-
+// 필수 검증 단계는 아니다. (정부 API 자체의 순간적인 503/오류는 juso.ts·
+// building-registry.ts에서 공통으로 한 번 재시도하므로 여기서는 신경 쓰지 않음.)
 async function lookupTopTierApprovalDate(row: ParsedBuildingRow): Promise<string | null> {
   if (!row.address) return null;
   if (!isLikelyTopTierBuilding(row)) return null;
   try {
-    return await lookupTopTierApprovalDateOnce(row);
+    const registryParams = await lookupAddressForRegistry(row.address);
+    if (!registryParams) return null;
+    const registry = await fetchBuildingRegistry(registryParams);
+    return registry?.useApprovalDate ?? null;
   } catch {
-    try {
-      return await lookupTopTierApprovalDateOnce(row);
-    } catch {
-      return null;
-    }
+    return null;
   }
 }
 

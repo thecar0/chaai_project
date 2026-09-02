@@ -1,6 +1,8 @@
 // 행정안전부 도로명주소 API - 주소 문자열을 건축물대장 조회에 필요한
 // 법정동코드/지번 코드로 변환한다. https://www.juso.go.kr 개발자센터에서 키 발급.
 
+import { withOneRetry } from "./retry";
+
 const JUSO_ENDPOINT = "https://business.juso.go.kr/addrlink/addrLinkApi.do";
 
 export type RegistryLookupParams = {
@@ -38,12 +40,13 @@ async function searchJusoList(keyword: string, countPerPage = 1): Promise<JusoRe
   url.searchParams.set("keyword", keyword);
   url.searchParams.set("resultType", "json");
 
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    throw new JusoApiError(`도로명주소 API 호출 실패: HTTP ${res.status}`);
-  }
-
-  const data = await res.json();
+  const data = await withOneRetry(async () => {
+    const res = await fetch(url.toString());
+    if (!res.ok) {
+      throw new JusoApiError(`도로명주소 API 호출 실패: HTTP ${res.status}`);
+    }
+    return res.json();
+  });
   const common = data?.results?.common;
   if (common?.errorCode && common.errorCode !== "0") {
     throw new JusoApiError(`도로명주소 API 오류: ${common.errorMessage ?? common.errorCode}`);
