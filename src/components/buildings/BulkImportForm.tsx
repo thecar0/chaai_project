@@ -58,6 +58,7 @@ export default function BulkImportForm() {
   const [skippedSheets, setSkippedSheets] = useState<SkippedSheet[] | null>(null);
   const [blankRowsSkipped, setBlankRowsSkipped] = useState(0);
   const [mergedRowsCount, setMergedRowsCount] = useState(0);
+  const [duplicateSkippedCount, setDuplicateSkippedCount] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   function resetOutputs() {
@@ -68,6 +69,7 @@ export default function BulkImportForm() {
     setSkippedSheets(null);
     setBlankRowsSkipped(0);
     setMergedRowsCount(0);
+    setDuplicateSkippedCount(0);
   }
 
   async function handlePreview() {
@@ -96,6 +98,7 @@ export default function BulkImportForm() {
     setSkippedSheets(data.skippedSheets);
     setBlankRowsSkipped(data.blankRowsSkipped ?? 0);
     setMergedRowsCount(data.mergedRowsCount ?? 0);
+    setDuplicateSkippedCount(data.duplicateSkippedCount ?? 0);
   }
 
   async function handleCommit() {
@@ -270,6 +273,12 @@ export default function BulkImportForm() {
                 <span className="text-silver-500">
                   {" "}
                   · 같은 건물의 종합/작동점검 행 {mergedRowsCount}개는 하나로 병합됨
+                </span>
+              )}
+              {duplicateSkippedCount > 0 && (
+                <span className="text-silver-500">
+                  {" "}
+                  · 이름·주소가 같은 중복 행 {duplicateSkippedCount}개는 자동으로 제외됨
                 </span>
               )}
               {blankRowsSkipped > 0 && (

@@ -103,11 +103,26 @@ async function handlePreview(req: NextRequest, userId: number) {
   }
 
   const existingKeys = await getExistingDuplicateKeys(userId);
+
+  // 건물명+주소가 이미 저장된 건물, 또는 같은 파일 안의 앞선 행과 겹치면 자동으로
+  // 한 건만 남긴다 - 오류로 보여주지 않고 조용히 제외한다(종합/작동 병합과 같은
+  // 방식). 주소가 없는 행은 비교할 수 없으니 그대로 둔다.
   const seenInFile = new Set<string>();
+  let duplicateSkippedCount = 0;
+  const dedupedRows = rows.filter((row) => {
+    if (!row.address) return true;
+    const key = duplicateKey(row.name, row.address);
+    if (existingKeys.has(key) || seenInFile.has(key)) {
+      duplicateSkippedCount += 1;
+      return false;
+    }
+    seenInFile.add(key);
+    return true;
+  });
 
   // 특급대상물로 추정되는 행들은 병렬로 건축물대장을 조회해서 실제 사용승인일을 확보한다.
   const topTierDates = await Promise.all(
-    rows.map(async (row) => ({
+    dedupedRows.map(async (row) => ({
       key: `${row.sheetName}::${row.rowNumber}`,
       date: await lookupTopTierApprovalDate(row),
     }))
@@ -119,7 +134,7 @@ async function handlePreview(req: NextRequest, userId: number) {
   // 주소·연면적·사용승인일은 저장을 막지는 않지만(나중에 정부 데이터로 채울 수
   // 있으므로), 정보가 빠진 채로 조용히 "정상"으로 자동 등록되면 안 된다 - 사용자가
   // 직접 확인하고 체크해서 등록하도록 어떤 정보가 없는지 구체적으로 표시해준다.
-  const previewRows = rows.map((rawRow) => {
+  const previewRows = dedupedRows.map((rawRow) => {
     const topTierDate = topTierDateMap.get(`${rawRow.sheetName}::${rawRow.rowNumber}`);
     // 특급대상물 추정 + 건축물대장 조회 성공 시, 엑셀 값 대신 정부 데이터의
     // 사용승인일을 신뢰한다 (반복 점검월만 있던 경우도 정확한 날짜로 대체됨).
@@ -141,20 +156,6 @@ async function handlePreview(req: NextRequest, userId: number) {
     if (!row.totalFloorAreaM2) missingFields.push("연면적");
     if (!row.useApprovalDate && !row.recurringInspectionMonth) missingFields.push("사용승인일");
 
-    // 건물명+주소가 이미 저장된 건물, 또는 같은 파일 안의 앞선 행과 겹치면 중복으로
-    // 막는다 (주소가 있는 행만 비교 대상).
-    let duplicateError: string | undefined;
-    if (row.address) {
-      const key = duplicateKey(row.name, row.address);
-      if (existingKeys.has(key)) {
-        duplicateError = "이미 등록된 건물과 이름·주소가 동일합니다 (중복)";
-      } else if (seenInFile.has(key)) {
-        duplicateError = "파일 안에 이름·주소가 같은 행이 이미 있습니다 (중복)";
-      } else {
-        seenInFile.add(key);
-      }
-    }
-
     const schemaError = parsed.success
       ? undefined
       : (Object.values(parsed.error.flatten().fieldErrors)[0]?.[0] ?? "입력값을 확인해주세요.");
@@ -162,10 +163,10 @@ async function handlePreview(req: NextRequest, userId: number) {
     return {
       ...row,
       key: `${row.sheetName}::${row.rowNumber}`,
-      valid: parsed.success && !duplicateError,
+      valid: parsed.success,
       complete: missingFields.length === 0,
       missingFields,
-      error: schemaError ?? duplicateError,
+      error: schemaError,
     };
   });
 
@@ -175,6 +176,7 @@ async function handlePreview(req: NextRequest, userId: number) {
     skippedSheets,
     blankRowsSkipped,
     mergedRowsCount,
+    duplicateSkippedCount,
   });
 }
 

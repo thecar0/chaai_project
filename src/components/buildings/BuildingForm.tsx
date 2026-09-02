@@ -62,8 +62,95 @@ export default function BuildingForm({ initial }: { initial?: BuildingFormInitia
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  const [addressResults, setAddressResults] = useState<
+    { roadAddr: string; jibunAddr: string; zipNo: string }[] | null
+  >(null);
+  const [addressSearchLoading, setAddressSearchLoading] = useState(false);
+  const [addressSearchError, setAddressSearchError] = useState<string | null>(null);
+
+  const [registryLoading, setRegistryLoading] = useState(false);
+  const [registryError, setRegistryError] = useState<string | null>(null);
+  const [registryMessage, setRegistryMessage] = useState<string | null>(null);
+
   function update<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  async function handleAddressSearch() {
+    const keyword = form.address.trim() || form.name.trim();
+    if (!keyword) {
+      setAddressSearchError("건축물명이나 주소 일부를 먼저 입력해주세요.");
+      return;
+    }
+    setAddressSearchError(null);
+    setAddressSearchLoading(true);
+    setAddressResults(null);
+    try {
+      const res = await fetch(`/api/address-search?q=${encodeURIComponent(keyword)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        setAddressSearchError(data.error ?? "주소 검색에 실패했습니다.");
+        return;
+      }
+      if (data.results.length === 0) {
+        setAddressSearchError("검색 결과가 없습니다.");
+        return;
+      }
+      setAddressResults(data.results);
+    } finally {
+      setAddressSearchLoading(false);
+    }
+  }
+
+  function selectAddress(roadAddr: string, jibunAddr: string) {
+    update("address", roadAddr || jibunAddr);
+    setAddressResults(null);
+  }
+
+  async function handleRegistryLookup() {
+    if (!form.address.trim()) {
+      setRegistryError("주소를 먼저 입력하거나 검색으로 채워주세요.");
+      return;
+    }
+    setRegistryError(null);
+    setRegistryMessage(null);
+    setRegistryLoading(true);
+    try {
+      const res = await fetch("/api/buildings/registry-lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: form.address }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setRegistryError(data.error ?? "건축물대장 조회에 실패했습니다.");
+        return;
+      }
+      const filled: string[] = [];
+      if (data.buildingType) {
+        update("buildingType", data.buildingType);
+        filled.push("주용도");
+      }
+      if (data.totalFloorAreaM2 != null) {
+        update("totalFloorAreaM2", String(data.totalFloorAreaM2));
+        filled.push("연면적");
+      }
+      if (data.floorCount != null) {
+        update("floorCount", String(data.floorCount));
+        filled.push("지상 층수");
+      }
+      if (data.useApprovalDate) {
+        update("useApprovalDate", data.useApprovalDate);
+        filled.push("사용승인일");
+      }
+      setRegistryMessage(
+        filled.length > 0
+          ? `건축물대장에서 ${filled.join(", ")}을(를) 채웠습니다.`
+          : "건축물대장에서 채울 수 있는 정보를 찾지 못했습니다."
+      );
+    } finally {
+      setRegistryLoading(false);
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -129,14 +216,61 @@ export default function BuildingForm({ initial }: { initial?: BuildingFormInitia
           required
         />
       </label>
-      <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
-        대지위치 / 도로명주소 (모르면 비워두고 나중에 &ldquo;주소 채우기&rdquo;로 채울 수 있음)
-        <input
-          value={form.address}
-          onChange={(e) => update("address", e.target.value)}
-          className="rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
-        />
-      </label>
+      <div className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
+        대지위치 / 도로명주소
+        <div className="flex gap-2">
+          <input
+            value={form.address}
+            onChange={(e) => update("address", e.target.value)}
+            placeholder="직접 입력하거나 검색으로 채울 수 있음"
+            className="flex-1 rounded-lg border border-silver-300 bg-silver-50 px-3.5 py-2.5 text-sm outline-none transition-all duration-150 focus:border-accent-500 focus:bg-white focus:ring-4 focus:ring-accent-500/10"
+          />
+          <button
+            type="button"
+            onClick={handleAddressSearch}
+            disabled={addressSearchLoading}
+            className="shrink-0 rounded-lg border border-silver-300 bg-white px-3.5 py-2.5 text-[13px] font-medium text-graphite transition-all duration-150 hover:bg-silver-50 active:scale-[0.98] disabled:opacity-50"
+          >
+            {addressSearchLoading ? "검색 중..." : "주소 검색"}
+          </button>
+        </div>
+        {addressSearchError && <p className="text-[12px] text-red-600">{addressSearchError}</p>}
+        {addressResults && (
+          <ul className="mt-1 flex max-h-52 flex-col gap-1 overflow-y-auto rounded-lg border border-silver-300 bg-white p-1.5 shadow-sm">
+            {addressResults.map((r, i) => (
+              <li key={i}>
+                <button
+                  type="button"
+                  onClick={() => selectAddress(r.roadAddr, r.jibunAddr)}
+                  className="w-full rounded-md px-2.5 py-2 text-left text-[13px] transition-colors duration-150 hover:bg-silver-50"
+                >
+                  <span className="block text-graphite">{r.roadAddr || r.jibunAddr}</span>
+                  {r.roadAddr && r.jibunAddr && (
+                    <span className="block text-[11px] text-silver-500">{r.jibunAddr}</span>
+                  )}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <div className="flex flex-col gap-2 rounded-xl bg-silver-50 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[12px] font-medium text-silver-500">
+            주소가 있으면 건축물대장에서 주용도·연면적·층수·사용승인일을 한 번에 가져올 수 있습니다.
+          </p>
+          <button
+            type="button"
+            onClick={handleRegistryLookup}
+            disabled={registryLoading}
+            className="shrink-0 rounded-lg bg-ink px-3.5 py-2.5 text-[13px] font-medium text-white transition-all duration-150 hover:bg-black active:scale-[0.98] disabled:opacity-50"
+          >
+            {registryLoading ? "조회 중..." : "공공데이터 불러오기"}
+          </button>
+        </div>
+        {registryError && <p className="text-[12px] text-red-600">{registryError}</p>}
+        {registryMessage && <p className="text-[12px] text-accent-600">{registryMessage}</p>}
+      </div>
       <label className="flex flex-col gap-1.5 text-[13px] font-medium text-graphite">
         주용도
         <input

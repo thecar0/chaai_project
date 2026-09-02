@@ -13,7 +13,17 @@ export type RegistryLookupParams = {
 
 export class JusoApiError extends Error {}
 
-async function searchJuso(keyword: string) {
+type JusoResultItem = {
+  admCd: string;
+  mtYn: string;
+  lnbrMnnm: string;
+  lnbrSlno: string;
+  roadAddr: string;
+  jibunAddr: string;
+  zipNo: string;
+};
+
+async function searchJusoList(keyword: string, countPerPage = 1): Promise<JusoResultItem[]> {
   const apiKey = process.env.JUSO_API_KEY;
   if (!apiKey) {
     throw new JusoApiError(
@@ -24,7 +34,7 @@ async function searchJuso(keyword: string) {
   const url = new URL(JUSO_ENDPOINT);
   url.searchParams.set("confmKey", apiKey);
   url.searchParams.set("currentPage", "1");
-  url.searchParams.set("countPerPage", "1");
+  url.searchParams.set("countPerPage", String(countPerPage));
   url.searchParams.set("keyword", keyword);
   url.searchParams.set("resultType", "json");
 
@@ -39,7 +49,12 @@ async function searchJuso(keyword: string) {
     throw new JusoApiError(`도로명주소 API 오류: ${common.errorMessage ?? common.errorCode}`);
   }
 
-  return data?.results?.juso?.[0] ?? null;
+  return data?.results?.juso ?? [];
+}
+
+async function searchJuso(keyword: string): Promise<JusoResultItem | null> {
+  const list = await searchJusoList(keyword, 1);
+  return list[0] ?? null;
 }
 
 /**
@@ -81,4 +96,20 @@ export async function searchAddressByKeyword(
   const juso = await searchJuso(keyword);
   if (!juso) return null;
   return { roadAddr: juso.roadAddr, jibunAddr: juso.jibunAddr };
+}
+
+export type AddressCandidate = {
+  roadAddr: string;
+  jibunAddr: string;
+  zipNo: string;
+};
+
+/**
+ * 건물 등록 화면에서 사용자가 직접 검색어(건물명·도로명·지번 등)를 입력해
+ * 후보 주소 목록을 받아 그 중 하나를 고를 수 있게 한다 (검색 결과 1건만
+ * 신뢰하는 searchAddressByKeyword와 달리 여러 건을 그대로 보여줌).
+ */
+export async function searchAddressCandidates(keyword: string): Promise<AddressCandidate[]> {
+  const list = await searchJusoList(keyword, 10);
+  return list.map((j) => ({ roadAddr: j.roadAddr, jibunAddr: j.jibunAddr, zipNo: j.zipNo }));
 }
