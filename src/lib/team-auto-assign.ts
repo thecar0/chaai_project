@@ -1,3 +1,4 @@
+import { getDailyLimit, type InspectionCategory } from "./capacity";
 import type { Coordinates } from "./geo/kakao";
 
 // 사전 필터·거리 감액 계산에 쓰는 것과 같은 방식의 직선거리(하버사인).
@@ -38,31 +39,68 @@ function farthestPointFrom(existingAnchors: Coordinates[], candidates: Coordinat
   return best;
 }
 
+// 평일(월~금)만 배치 대상이므로, 그 달의 평일 수가 곧 팀의 "한 달 용량"(하루 능력
+// 비율 1을 몇 번 쓸 수 있는지)이 된다.
+export function countWeekdaysInMonth(year: number, monthNum: number): number {
+  const daysInMonth = new Date(year, monthNum, 0).getDate();
+  let count = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const day = new Date(year, monthNum - 1, d).getDay();
+    if (day !== 0 && day !== 6) count++;
+  }
+  return count;
+}
+
+export type TeamCapacityInfo = { id: number; personnelCount: number };
+
+export type FreeBuildingInput = {
+  buildingId: number;
+  coordinates: Coordinates | null;
+  // 같은 건물이 이번 달에 여러 항목(예: 드물게 종합+작동이 겹치는 경우)을 가질 수
+  // 있어 전부 더해야 정확한 부담을 계산할 수 있다.
+  demandItems: { category: InspectionCategory; rawAmount: number }[];
+};
+
 export type FreeBuildingAssignment = {
   buildingId: number;
   // null = 배정 불가 (건물 좌표가 없어서 - 그 외에는 항상 배정된다)
   assignedTeamId: number | null;
 };
 
+// 이 건물을 특정 팀(인원수)에 배정했을 때 그 팀의 "한 달 용량"(평일 수)에서
+// 얼마를 차지하는지. 인원이 많은 팀일수록 하루 한도(dailyLimit)가 커서 같은
+// 건물의 부담이 작게 계산된다 - 그래서 인원 많은 팀이 자연히 더 많이 받게 된다.
+function demandFor(items: { category: InspectionCategory; rawAmount: number }[], personnelCount: number): number {
+  return items.reduce(
+    (sum, item) => sum + item.rawAmount / getDailyLimit(personnelCount, item.category),
+    0
+  );
+}
+
 /**
- * 미배정 건물을 팀에 거리 기준으로 자동 배정한다.
+ * 미배정 건물을 팀에 배정한다. 두 단계로 계산한다.
  *
- * - 고정 담당 건물이 있는 팀은 그 건물들의 좌표 중심점(centroid)을 기준점으로
- *   쓴다 (건물이 늘어나도 이 기준점은 안 바뀜 - 담당자가 직접 정한 건물이니까).
- * - 고정 담당 건물이 하나도 없는 팀(들어온 지 얼마 안 됐거나 아직 아무것도 안
- *   정한 팀)도 배치가 되어야 하므로, 미배정 건물들의 좌표 분포에서 farthest-point
- *   방식으로 가상 기준점을 만들어준다 - 팀마다 기준 건물을 반드시 지정해야만
- *   동작하던 이전 방식의 한계를 없앤 것.
- * - 가상 기준점은 초기 배정 결과를 보고 몇 차례 다시 계산(그 팀에 배정된 건물들의
- *   중심으로 이동)해서 더 고르게 나뉘도록 다듬는다(Lloyd's algorithm과 같은
- *   방식). 고정 기준점은 이 과정에서 움직이지 않는다.
- * - 좌표가 아예 없는 건물만 배정 불가로 남는다.
+ * 1) 지역 군집: 고정 담당 건물이 있는 팀은 그 위치의 중심점을 기준점으로 쓰고,
+ *    고정 담당이 없는 팀은 미배정 건물들의 분포에서 farthest-point로 가상
+ *    기준점을 만든 뒤 몇 차례 다듬는다(팀마다 기준 건물을 반드시 지정해야만
+ *    동작하던 이전 방식의 한계를 없앤 것).
+ * 2) 용량 고려 배정: 그냥 "가장 가까운 팀"으로만 몰아주면, 인원이 많아서 여유가
+ *    있는 팀도 위치가 애매하면 계속 비어있고 근처 소규모 팀만 넘치는 문제가
+ *    생긴다. 그래서 건물을 가까운 순으로 하나씩 확정하되, 1순위 팀의 이번 달
+ *    용량(평일 수)이 이미 찼으면 capacity가 남은 다음으로 가까운 팀으로 넘긴다 -
+ *    인원이 많은 팀은 같은 건물의 부담이 작게 계산되므로 자연히 더 많이 받을 수
+ *    있다. 전 팀이 다 차면 그래도 가장 가까운 팀에 배정한다(그 팀은 "인원 부족"
+ *    경고로 표시됨).
  */
 export function assignFreeBuildingsByProximity(
-  teamIds: number[],
+  teams: TeamCapacityInfo[],
   pinnedByTeam: Map<number, Coordinates[]>,
-  freeBuildings: { buildingId: number; coordinates: Coordinates | null }[]
+  freeBuildings: FreeBuildingInput[],
+  weekdaysInMonth: number
 ): FreeBuildingAssignment[] {
+  const teamIds = teams.map((t) => t.id);
+  const teamById = new Map(teams.map((t) => [t.id, t]));
+
   const fixedAnchors = new Map<number, Coordinates>();
   for (const teamId of teamIds) {
     const c = centroid(pinnedByTeam.get(teamId) ?? []);
@@ -70,7 +108,7 @@ export function assignFreeBuildingsByProximity(
   }
 
   const withCoords = freeBuildings.filter(
-    (b): b is { buildingId: number; coordinates: Coordinates } => b.coordinates != null
+    (b): b is FreeBuildingInput & { coordinates: Coordinates } => b.coordinates != null
   );
   const withoutCoords = freeBuildings.filter((b) => b.coordinates == null);
 
@@ -81,14 +119,17 @@ export function assignFreeBuildingsByProximity(
     // 1) 시드: 기존 기준점들과 최대한 멀리 떨어진 지점부터 하나씩 골라 넓게 퍼뜨린다.
     const seedPool = [...fixedAnchors.values()];
     for (const teamId of anchorlessTeamIds) {
-      const seed = farthestPointFrom(seedPool, withCoords.map((b) => b.coordinates));
+      const seed = farthestPointFrom(
+        seedPool,
+        withCoords.map((b) => b.coordinates)
+      );
       if (!seed) break;
       virtualAnchors.set(teamId, seed);
       seedPool.push(seed);
     }
 
-    // 2) 정제: 가상 기준점을 실제 배정 결과의 중심으로 몇 차례 옮겨서 더 고르게 나눈다.
-    //    고정 기준점(fixedAnchors)은 손대지 않는다.
+    // 2) 정제: 순수 거리 기준으로 몇 차례 재군집해서 가상 기준점을 다듬는다
+    //    (용량은 아래 3단계에서 따로 고려하므로, 여기서는 지역만 자연스럽게 나눈다).
     const REFINEMENT_ROUNDS = 3;
     for (let round = 0; round < REFINEMENT_ROUNDS; round++) {
       const allAnchors = new Map<number, Coordinates>([...fixedAnchors, ...virtualAnchors]);
@@ -118,20 +159,50 @@ export function assignFreeBuildingsByProximity(
 
   const allAnchors = new Map<number, Coordinates>([...fixedAnchors, ...virtualAnchors]);
 
-  const assignments: FreeBuildingAssignment[] = withCoords.map((b) => {
-    if (allAnchors.size === 0) return { buildingId: b.buildingId, assignedTeamId: null };
-    let bestTeamId: number | null = null;
-    let bestDist = Infinity;
-    for (const [teamId, anchor] of allAnchors) {
-      const d = haversineKm(b.coordinates, anchor);
-      if (d < bestDist) {
-        bestDist = d;
-        bestTeamId = teamId;
+  // 3) 용량 고려 배정: 각 건물의 팀별 거리 순위를 구해 가까운 순으로 정렬하고,
+  // 앞에서부터 하나씩 "가장 가까운, 용량 남은 팀"에 확정한다.
+  const ranked = withCoords
+    .map((b) => ({
+      building: b,
+      ranking: teamIds
+        .filter((id) => allAnchors.has(id))
+        .map((id) => ({ teamId: id, dist: haversineKm(b.coordinates, allAnchors.get(id)!) }))
+        .sort((x, y) => x.dist - y.dist),
+    }))
+    .sort((a, b) => (a.ranking[0]?.dist ?? Infinity) - (b.ranking[0]?.dist ?? Infinity));
+
+  const remainingCapacity = new Map(teamIds.map((id) => [id, weekdaysInMonth]));
+  const assignmentByBuildingId = new Map<number, number | null>();
+
+  for (const { building, ranking } of ranked) {
+    if (ranking.length === 0) {
+      assignmentByBuildingId.set(building.buildingId, null);
+      continue;
+    }
+    let chosen: number | null = null;
+    for (const { teamId } of ranking) {
+      const team = teamById.get(teamId)!;
+      const demand = demandFor(building.demandItems, team.personnelCount);
+      if (remainingCapacity.get(teamId)! >= demand) {
+        chosen = teamId;
+        remainingCapacity.set(teamId, remainingCapacity.get(teamId)! - demand);
+        break;
       }
     }
-    return { buildingId: b.buildingId, assignedTeamId: bestTeamId };
-  });
+    if (chosen == null) {
+      // 모든 팀 용량이 이미 찼어도 배치는 되어야 하니 그래도 가장 가까운 팀에 배정한다
+      // (그 팀은 인원 부족으로 표시되고, 사용자가 인원을 늘리거나 재배정하면 된다).
+      chosen = ranking[0].teamId;
+      const team = teamById.get(chosen)!;
+      remainingCapacity.set(chosen, remainingCapacity.get(chosen)! - demandFor(building.demandItems, team.personnelCount));
+    }
+    assignmentByBuildingId.set(building.buildingId, chosen);
+  }
 
+  const assignments: FreeBuildingAssignment[] = withCoords.map((b) => ({
+    buildingId: b.buildingId,
+    assignedTeamId: assignmentByBuildingId.get(b.buildingId) ?? null,
+  }));
   for (const b of withoutCoords) {
     assignments.push({ buildingId: b.buildingId, assignedTeamId: null });
   }

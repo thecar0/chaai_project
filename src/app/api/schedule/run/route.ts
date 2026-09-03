@@ -7,7 +7,7 @@ import { getSession } from "@/lib/session";
 import { CapacityRuleError, getDailyLimit, type InspectionCategory } from "@/lib/capacity";
 import { KakaoApiError, type Coordinates } from "@/lib/geo/kakao";
 import { preloadDrivingRoutes, makeMemoizedDistanceFn } from "@/lib/geo/distance-cache";
-import { assignFreeBuildingsByProximity } from "@/lib/team-auto-assign";
+import { assignFreeBuildingsByProximity, countWeekdaysInMonth } from "@/lib/team-auto-assign";
 import { placeInspections, type PlacementResult } from "@/lib/schedule-placement";
 import {
   CATEGORIES,
@@ -85,16 +85,19 @@ export async function POST(req: NextRequest) {
     // 몫만 골라낸다("전체 배치"와 항상 같은 배정 기준을 쓰게 됨).
     const allTeams = await db.query.teams.findMany({
       where: eq(teams.userId, session.userId),
-      columns: { id: true },
+      columns: { id: true, personnelCount: true },
     });
     if (!allTeams.some((t) => t.id === teamId)) {
       return NextResponse.json({ error: "팀을 찾을 수 없습니다." }, { status: 404 });
     }
-    const allTeamIds = allTeams.map((t) => t.id);
 
-    const byBuilding = new Map<number, RawCategoryBuilding>();
-    for (const b of allRawBuildings) if (!byBuilding.has(b.buildingId)) byBuilding.set(b.buildingId, b);
-    const uniqueBuildings = Array.from(byBuilding.values());
+    const byBuilding = new Map<number, RawCategoryBuilding[]>();
+    for (const b of allRawBuildings) {
+      const list = byBuilding.get(b.buildingId) ?? [];
+      list.push(b);
+      byBuilding.set(b.buildingId, list);
+    }
+    const uniqueBuildings = Array.from(byBuilding.values()).map((list) => list[0]);
 
     const pinnedByTeam = new Map<number, Coordinates[]>();
     for (const b of uniqueBuildings) {
@@ -106,13 +109,25 @@ export async function POST(req: NextRequest) {
 
     const freeBuildings = uniqueBuildings
       .filter((b) => b.buildingTeamId == null)
-      .map((b) => ({ buildingId: b.buildingId, coordinates: b.coordinates }));
-    const assignments = assignFreeBuildingsByProximity(allTeamIds, pinnedByTeam, freeBuildings);
+      .map((b) => ({
+        buildingId: b.buildingId,
+        coordinates: b.coordinates,
+        demandItems: byBuilding.get(b.buildingId)!.map((r) => ({
+          category: r.category,
+          rawAmount: r.rawAmount,
+        })),
+      }));
+    const assignments = assignFreeBuildingsByProximity(
+      allTeams,
+      pinnedByTeam,
+      freeBuildings,
+      countWeekdaysInMonth(year, monthNum)
+    );
     const assignmentByBuildingId = new Map(assignments.map((a) => [a.buildingId, a.assignedTeamId]));
 
     for (const a of assignments) {
       if (a.assignedTeamId === null) {
-        const b = byBuilding.get(a.buildingId);
+        const b = byBuilding.get(a.buildingId)?.[0];
         if (b) unassignableBuildings.push({ buildingId: b.buildingId, name: b.name });
       } else if (a.assignedTeamId === teamId) {
         autoAssignedBuildingIds.push(a.buildingId);

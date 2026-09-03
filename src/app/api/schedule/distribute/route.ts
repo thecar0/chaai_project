@@ -7,7 +7,7 @@ import { getSession } from "@/lib/session";
 import { CapacityRuleError, getDailyLimit, type InspectionCategory } from "@/lib/capacity";
 import { KakaoApiError, type Coordinates } from "@/lib/geo/kakao";
 import { preloadDrivingRoutes, makeMemoizedDistanceFn } from "@/lib/geo/distance-cache";
-import { assignFreeBuildingsByProximity } from "@/lib/team-auto-assign";
+import { assignFreeBuildingsByProximity, countWeekdaysInMonth } from "@/lib/team-auto-assign";
 import { placeInspections, type PlacementResult } from "@/lib/schedule-placement";
 import {
   CATEGORIES,
@@ -77,9 +77,13 @@ export async function POST(req: NextRequest) {
   }
 
   const selectedTeamIdSet = new Set(teamIds);
-  const byBuilding = new Map<number, RawCategoryBuilding>();
-  for (const b of allRawBuildings) if (!byBuilding.has(b.buildingId)) byBuilding.set(b.buildingId, b);
-  const uniqueBuildings = Array.from(byBuilding.values());
+  const byBuilding = new Map<number, RawCategoryBuilding[]>();
+  for (const b of allRawBuildings) {
+    const list = byBuilding.get(b.buildingId) ?? [];
+    list.push(b);
+    byBuilding.set(b.buildingId, list);
+  }
+  const uniqueBuildings = Array.from(byBuilding.values()).map((list) => list[0]);
 
   // 선택한 팀들의 고정 담당 건물만 기준점(anchor) 후보가 된다 - 체크 안 한 팀의
   // 고정 건물은 이번 배치 대상에서 아예 빠진다(그 팀 자체가 이번 실행에 없으므로).
@@ -93,14 +97,26 @@ export async function POST(req: NextRequest) {
 
   const freeBuildings = uniqueBuildings
     .filter((b) => b.buildingTeamId == null)
-    .map((b) => ({ buildingId: b.buildingId, coordinates: b.coordinates }));
-  const assignments = assignFreeBuildingsByProximity(teamIds, pinnedByTeam, freeBuildings);
+    .map((b) => ({
+      buildingId: b.buildingId,
+      coordinates: b.coordinates,
+      demandItems: byBuilding.get(b.buildingId)!.map((r) => ({
+        category: r.category,
+        rawAmount: r.rawAmount,
+      })),
+    }));
+  const assignments = assignFreeBuildingsByProximity(
+    selectedTeams,
+    pinnedByTeam,
+    freeBuildings,
+    countWeekdaysInMonth(year, monthNum)
+  );
   const assignmentByBuildingId = new Map(assignments.map((a) => [a.buildingId, a.assignedTeamId]));
 
   const unassignableBuildings: { buildingId: number; name: string }[] = [];
   for (const a of assignments) {
     if (a.assignedTeamId === null) {
-      const b = byBuilding.get(a.buildingId);
+      const b = byBuilding.get(a.buildingId)?.[0];
       if (b) unassignableBuildings.push({ buildingId: b.buildingId, name: b.name });
     }
   }
