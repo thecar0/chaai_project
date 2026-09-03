@@ -12,6 +12,7 @@ import {
   type InspectionType,
 } from "@/lib/inspection-format";
 import ScheduleRunForm from "@/components/schedule/ScheduleRunForm";
+import TeamDistributeForm from "@/components/schedule/TeamDistributeForm";
 
 const MONTH_FILTERS: { key: "all" | "postponed" | "completed"; label: string }[] = [
   { key: "all", label: "전체" },
@@ -201,15 +202,24 @@ export default function CalendarView() {
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_340px]">
         <div className="flex flex-col gap-6">
-          {showPlacement && (
-            <ScheduleRunForm
-              key={`${cursorMonthValue}-${teamFilter}`}
+          {showPlacement && teamFilter === "all" && teams.length > 0 ? (
+            <TeamDistributeForm
+              key={cursorMonthValue}
               initialMonth={cursorMonthValue}
+              teams={teams}
               onApplied={loadInspections}
-              teamId={selectedTeamId}
-              teamLabel={selectedTeamLabel}
-              teamPersonnelCount={teams.find((t) => t.id === selectedTeamId)?.personnelCount}
             />
+          ) : (
+            showPlacement && (
+              <ScheduleRunForm
+                key={`${cursorMonthValue}-${teamFilter}`}
+                initialMonth={cursorMonthValue}
+                onApplied={loadInspections}
+                teamId={selectedTeamId}
+                teamLabel={selectedTeamLabel}
+                teamPersonnelCount={teams.find((t) => t.id === selectedTeamId)?.personnelCount}
+              />
+            )
           )}
 
           <div className="rounded-2xl border border-silver-300/70 bg-white p-5 shadow-sm">
