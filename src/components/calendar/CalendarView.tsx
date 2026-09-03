@@ -13,6 +13,7 @@ import {
 } from "@/lib/inspection-format";
 import ScheduleRunForm from "@/components/schedule/ScheduleRunForm";
 import TeamDistributeForm from "@/components/schedule/TeamDistributeForm";
+import { toDateString, weekdayRange } from "@/lib/weekday-utils";
 
 const MONTH_FILTERS: { key: "all" | "postponed" | "completed"; label: string }[] = [
   { key: "all", label: "전체" },
@@ -23,7 +24,8 @@ const MONTH_FILTERS: { key: "all" | "postponed" | "completed"; label: string }[]
 type Inspection = {
   id: number;
   inspectionType: InspectionType;
-  scheduledDate: string; // YYYY-MM-DD
+  scheduledDate: string; // YYYY-MM-DD (시작일)
+  durationDays: number; // 시작일부터 평일 기준 며칠에 걸쳐 있는지 (보통 1)
   status: InspectionStatus;
   isManuallyScheduled: boolean;
   buildingId: number;
@@ -87,12 +89,20 @@ export default function CalendarView() {
     return inspections.filter((i) => i.teamId === teamId);
   }, [inspections, teamFilter]);
 
+  // 며칠에 걸친 점검(durationDays > 1)은 시작일에만 데이터가 있지만, 시작일부터
+  // 평일 기준으로 그 일수만큼 이어지는 모든 날짜에 표시해줘야 "이 날도 이 건물
+  // 작업 중"이라는 걸 알 수 있다. 첫날에만 점만 찍히면 마지막 날까지 며칠이
+  // 걸리는지 캘린더만 보고는 알 수 없었다.
   const inspectionsByDate = useMemo(() => {
     const map = new Map<string, Inspection[]>();
     for (const insp of visibleInspections) {
-      const list = map.get(insp.scheduledDate) ?? [];
-      list.push(insp);
-      map.set(insp.scheduledDate, list);
+      const span = weekdayRange(new Date(insp.scheduledDate), Math.max(1, insp.durationDays));
+      for (const d of span) {
+        const key = toDateString(d);
+        const list = map.get(key) ?? [];
+        list.push(insp);
+        map.set(key, list);
+      }
     }
     return map;
   }, [visibleInspections]);
@@ -100,13 +110,19 @@ export default function CalendarView() {
   const monthInspections = useMemo(() => {
     const y = cursor.getFullYear();
     const m = cursor.getMonth();
-    return visibleInspections
-      .filter((i) => {
-        const d = new Date(i.scheduledDate);
-        return d.getFullYear() === y && d.getMonth() === m;
-      })
-      .sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
-  }, [visibleInspections, cursor]);
+    const seen = new Set<number>();
+    const result: Inspection[] = [];
+    for (const [dateKey, list] of inspectionsByDate) {
+      const d = new Date(dateKey);
+      if (d.getFullYear() !== y || d.getMonth() !== m) continue;
+      for (const insp of list) {
+        if (seen.has(insp.id)) continue;
+        seen.add(insp.id);
+        result.push(insp);
+      }
+    }
+    return result.sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
+  }, [inspectionsByDate, cursor]);
 
   // 이월 기준: 9월에 예정이던 걸 10월로 이월했다면, "옮겨진 날짜(10월)" 기준으로
   // 10월의 이월 탭에 뜬다 (monthInspections가 이미 scheduledDate 기준 월로 걸러져 있음).
@@ -452,7 +468,17 @@ function InspectionList({
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex flex-col gap-0.5">
-              <span className="text-[13px] font-medium text-ink">{insp.buildingName}</span>
+              <span className="text-[13px] font-medium text-ink">
+                {insp.buildingName}
+                {insp.durationDays > 1 && (
+                  <span
+                    className="ml-1.5 rounded-full bg-[#fff4e0] px-1.5 py-0.5 text-[11px] font-medium text-[#b25e00]"
+                    title="이 날부터 평일 기준 이 일수만큼 이어서 진행됩니다."
+                  >
+                    {insp.durationDays}일 소요
+                  </span>
+                )}
+              </span>
               <span className="text-[11px] text-silver-500">
                 {showDate && `${formatKoreanDate(insp.scheduledDate)} · `}
                 {TYPE_LABEL[insp.inspectionType]}
@@ -552,12 +578,6 @@ function addOneMonth(dateStr: string) {
   return toDateString(new Date(y, m, day));
 }
 
-function toDateString(d: Date) {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
 
 function formatKoreanDate(dateStr: string) {
   const d = new Date(dateStr);

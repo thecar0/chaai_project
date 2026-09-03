@@ -114,6 +114,9 @@ export const inspectionSchedules = pgTable(
       .notNull(),
     inspectionType: inspectionTypeEnum("inspection_type").notNull(),
     scheduledDate: date("scheduled_date", { mode: "string" }).notNull(),
+    // scheduledDate(시작일)부터 평일 기준 며칠에 걸쳐 진행되는지. 보통 1이고,
+    // 혼자서도 하루 점검 한도를 넘는 큰 건물만 배치 엔진이 1보다 크게 채운다.
+    durationDays: integer("duration_days").default(1).notNull(),
     status: inspectionStatusEnum("status").default("scheduled").notNull(),
     // 사용자가 직접 날짜를 지정(이월)한 건 - 자동 인력 배치 대상에서 제외한다.
     isManuallyScheduled: boolean("is_manually_scheduled").default(false).notNull(),

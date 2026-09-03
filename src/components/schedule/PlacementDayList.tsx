@@ -10,6 +10,7 @@ export type MergedItem = {
   rawAmount: number;
   usageRatio: number;
   category: Category;
+  durationDays: number;
 };
 
 export type MergedGroup = {
@@ -102,7 +103,17 @@ export default function PlacementDayList({ days }: { days: MergedDay[] }) {
                                   key={item.inspectionId}
                                   className="flex items-center justify-between px-5 py-2 text-[13px]"
                                 >
-                                  <span>{item.name}</span>
+                                  <span>
+                                    {item.name}
+                                    {item.durationDays > 1 && (
+                                      <span
+                                        className="ml-1.5 rounded-full bg-[#fff4e0] px-1.5 py-0.5 text-[11px] font-medium text-[#b25e00]"
+                                        title="이 날부터 평일 기준 이 일수만큼 이어서 진행됩니다."
+                                      >
+                                        {item.durationDays}일 소요
+                                      </span>
+                                    )}
+                                  </span>
                                   <span className="text-silver-500">
                                     {Math.round(item.rawAmount).toLocaleString()}
                                     {unitFor(item.category)}
@@ -121,7 +132,17 @@ export default function PlacementDayList({ days }: { days: MergedDay[] }) {
                         key={item.inspectionId}
                         className="flex items-center justify-between px-5 py-2 text-[13px]"
                       >
-                        <span>{item.name}</span>
+                        <span>
+                          {item.name}
+                          {item.durationDays > 1 && (
+                            <span
+                              className="ml-1.5 rounded-full bg-[#fff4e0] px-1.5 py-0.5 text-[11px] font-medium text-[#b25e00]"
+                              title="이 날부터 평일 기준 이 일수만큼 이어서 진행됩니다."
+                            >
+                              {item.durationDays}일 소요
+                            </span>
+                          )}
+                        </span>
                         <span className="text-silver-500">
                           {Math.round(item.rawAmount).toLocaleString()}
                           {unitFor(item.category)}

@@ -24,6 +24,12 @@ const applySchema = z.object({
   teamAssignments: z
     .array(z.object({ buildingId: z.number().int().positive(), teamId: z.number().int().positive() }))
     .optional(),
+  // 혼자서도 하루 한도를 넘어 여러 날에 걸쳐 배치된 점검의 소요일수 - days에는
+  // 시작일에만 한 번 나오므로, 여기서 durationDays를 같이 저장해야 캘린더가
+  // 마지막 날까지 표시할 수 있다. 없는(1일짜리) 점검은 안 보내도 된다.
+  durations: z
+    .array(z.object({ inspectionId: z.number().int().positive(), durationDays: z.number().int().min(1) }))
+    .optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -55,6 +61,25 @@ export async function POST(req: NextRequest) {
         .set({ scheduledDate: day.date })
         .where(inArray(inspectionSchedules.id, ids));
     })
+  );
+
+  // durationDays도 매번 다시 써준다(1일로 재배치됐으면 이전에 남아있던 여러 날짜
+  // 값을 지워야 하므로) - 언급 안 된 id는 1일로 취급한다.
+  const durationByInspectionId = new Map(
+    (parsed.data.durations ?? []).map((d) => [d.inspectionId, d.durationDays])
+  );
+  const idsByDuration = new Map<number, number[]>();
+  for (const id of allIds) {
+    if (!ownedIds.has(id)) continue;
+    const duration = durationByInspectionId.get(id) ?? 1;
+    const list = idsByDuration.get(duration) ?? [];
+    list.push(id);
+    idsByDuration.set(duration, list);
+  }
+  await Promise.all(
+    Array.from(idsByDuration.entries()).map(([durationDays, ids]) =>
+      db.update(inspectionSchedules).set({ durationDays }).where(inArray(inspectionSchedules.id, ids))
+    )
   );
 
   if (parsed.data.teamAssignments && parsed.data.teamAssignments.length > 0) {

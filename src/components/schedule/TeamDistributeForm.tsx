@@ -104,13 +104,17 @@ export default function TeamDistributeForm({
     const teamAssignments = result.teams.flatMap((t) =>
       t.autoAssignedBuildingIds.map((buildingId) => ({ buildingId, teamId: t.teamId }))
     );
+    const durations = result.teams
+      .flatMap((t) => t.days.flatMap((d) => d.groups.flatMap((g) => g.items)))
+      .filter((item) => item.durationDays > 1)
+      .map((item) => ({ inspectionId: item.inspectionId, durationDays: item.durationDays }));
 
     setError(null);
     setApplying(true);
     const res = await fetch("/api/schedule/apply", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ days, teamAssignments }),
+      body: JSON.stringify({ days, teamAssignments, durations }),
     });
     const data = await res.json();
     setApplying(false);

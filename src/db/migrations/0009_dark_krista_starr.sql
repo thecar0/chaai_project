@@ -1,0 +1,1 @@
+ALTER TABLE "inspection_schedules" ADD COLUMN "duration_days" integer DEFAULT 1 NOT NULL;

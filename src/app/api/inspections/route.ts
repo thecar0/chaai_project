@@ -14,6 +14,7 @@ export async function GET() {
       id: inspectionSchedules.id,
       inspectionType: inspectionSchedules.inspectionType,
       scheduledDate: inspectionSchedules.scheduledDate,
+      durationDays: inspectionSchedules.durationDays,
       status: inspectionSchedules.status,
       isManuallyScheduled: inspectionSchedules.isManuallyScheduled,
       buildingId: buildings.id,

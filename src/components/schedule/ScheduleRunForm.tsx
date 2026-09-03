@@ -106,6 +106,10 @@ export default function ScheduleRunForm({
           date: day.date,
           inspectionIds: day.groups.flatMap((group) => group.items.map((item) => item.inspectionId)),
         })),
+        durations: result.days
+          .flatMap((day) => day.groups.flatMap((group) => group.items))
+          .filter((item) => item.durationDays > 1)
+          .map((item) => ({ inspectionId: item.inspectionId, durationDays: item.durationDays })),
         teamAssignments:
           teamId != null
             ? result.autoAssignedBuildingIds.map((buildingId) => ({ buildingId, teamId }))

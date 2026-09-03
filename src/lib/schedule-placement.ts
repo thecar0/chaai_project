@@ -7,6 +7,7 @@ import {
 } from "./capacity";
 import { getCachedDrivingRoute } from "./geo/distance-cache";
 import type { Coordinates } from "./geo/kakao";
+import { nextWeekday, toDateString, toWeekday, weekdayAfterSteps } from "./weekday-utils";
 
 export type PlacementBuilding = {
   buildingId: number;
@@ -27,6 +28,9 @@ export type PlacementDayItem = {
   category: InspectionCategory;
   rawAmount: number;
   usageRatio: number;
+  // 이 점검이 시작일(이 항목이 속한 day.date)부터 며칠(평일 기준) 동안
+  // 이어지는지. 보통 1이고, 혼자서도 하루 능력을 넘는 건물만 1보다 크다.
+  durationDays: number;
 };
 
 export type PlacementDay = {
@@ -89,32 +93,6 @@ const DAILY_CAPACITY = 1;
 const MONTH_OVERFLOW_REASON =
   "이번 달 안에 배치할 수 없습니다 (인원 부족 - 인원수를 늘리거나 다음 달로 넘기세요).";
 
-function isWeekend(d: Date): boolean {
-  const day = d.getDay();
-  return day === 0 || day === 6;
-}
-
-// 주말이면 다음 평일로 넘긴다 (시작일 보정용).
-function toWeekday(d: Date): Date {
-  const copy = new Date(d);
-  while (isWeekend(copy)) copy.setDate(copy.getDate() + 1);
-  return copy;
-}
-
-// 하루 전진하되, 그 결과가 주말이면 다음 평일까지 계속 넘긴다.
-function nextWeekday(d: Date): Date {
-  const copy = new Date(d);
-  copy.setDate(copy.getDate() + 1);
-  return toWeekday(copy);
-}
-
-// start(평일이라고 가정)로부터 평일 기준으로 steps번 전진한 날짜.
-function weekdayAfterSteps(start: Date, steps: number): Date {
-  let d = new Date(start);
-  for (let i = 0; i < steps; i++) d = nextWeekday(d);
-  return d;
-}
-
 export async function placeInspections(
   buildings: PlacementBuilding[],
   startDate: Date,
@@ -142,28 +120,30 @@ export async function placeInspections(
   }
 
   // 1) 혼자서도 하루 능력을 넘는 건물부터 연속(평일 기준) 배치 (선택한 달을 넘어가면 배치하지 않음)
+  // 점검 하나가 며칠에 걸쳐도 DB에는 시작일 1개만 저장되므로(inspectionSchedules가
+  // 점검당 한 행), 여기서도 날짜마다 따로 항목을 만들지 않고 시작일 하루에
+  // durationDays로 표시한다 - 그래야 캘린더가 "시작일~종료일"을 정확히 계산해서
+  // 마지막 날까지 표시할 수 있다(예전엔 날짜마다 같은 점검을 중복으로 넣어서,
+  // 적용 시점에 같은 행의 scheduledDate를 여러 번 덮어써 결과가 뒤죽박죽이었다).
   for (const b of soloPool) {
     const daysNeeded = calculateInspectionDays(b.usageRatio, DAILY_CAPACITY);
     if (weekdayAfterSteps(cursor, daysNeeded - 1) > endDate) {
       unplaced.push({ ...toItem(b), reason: MONTH_OVERFLOW_REASON, reasonCode: "capacity" });
       continue;
     }
-    for (let i = 0; i < daysNeeded; i++) {
-      const dayRatio = b.usageRatio / daysNeeded;
-      days.push({
-        date: toDateString(cursor),
-        items: [
-          {
-            ...toItem(b),
-            usageRatio: dayRatio,
-            rawAmount: b.rawAmount / daysNeeded,
-          },
-        ],
-        usedRatio: DAILY_CAPACITY,
-        estimatedMinutes: estimateWorkMinutes(dayRatio),
-      });
-      cursor = nextWeekday(cursor);
-    }
+    const dayRatio = b.usageRatio / daysNeeded;
+    days.push({
+      date: toDateString(cursor),
+      items: [
+        {
+          ...toItem(b),
+          durationDays: daysNeeded,
+        },
+      ],
+      usedRatio: DAILY_CAPACITY,
+      estimatedMinutes: estimateWorkMinutes(dayRatio),
+    });
+    cursor = weekdayAfterSteps(cursor, daysNeeded);
   }
 
   // 2) 나머지는 그리디 최근접 배치로 하루 능력(비율 1)을 채움 - 유형 섞어서 채운다
@@ -252,6 +232,7 @@ function toItem(b: PlacementBuilding): PlacementDayItem {
     category: b.category,
     rawAmount: b.rawAmount,
     usageRatio: b.usageRatio,
+    durationDays: 1,
   };
 }
 
@@ -266,11 +247,4 @@ function haversineKm(a: Coordinates | null, b: Coordinates | null): number {
   const h =
     Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
-}
-
-function toDateString(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
 }
