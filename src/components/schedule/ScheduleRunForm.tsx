@@ -238,9 +238,8 @@ export default function ScheduleRunForm({
                 자동 배정하지 못한 미배정 건물 {result.unassignableBuildings.length}건
               </p>
               <p className="mb-2 text-[#8a1f18]">
-                주소가 없거나(좌표를 못 구함), 어느 팀에도 담당(고정) 건물이 없어서 거리
-                기준을 잡을 수 없었습니다. 팀 관리에서 각 팀에 기준 건물을 최소 1개
-                지정하거나, 아래 건물의 주소를 채워주세요.
+                주소가 없어서 좌표를 못 구해 거리 기준을 잡을 수 없었습니다. 아래 건물의
+                주소를 채워주세요.
               </p>
               <ul className="flex flex-col gap-1 text-[#8a1f18]">
                 {result.unassignableBuildings.map((b) => (

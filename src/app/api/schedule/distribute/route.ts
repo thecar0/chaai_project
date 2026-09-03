@@ -94,7 +94,7 @@ export async function POST(req: NextRequest) {
   const freeBuildings = uniqueBuildings
     .filter((b) => b.buildingTeamId == null)
     .map((b) => ({ buildingId: b.buildingId, coordinates: b.coordinates }));
-  const assignments = assignFreeBuildingsByProximity(pinnedByTeam, freeBuildings);
+  const assignments = assignFreeBuildingsByProximity(teamIds, pinnedByTeam, freeBuildings);
   const assignmentByBuildingId = new Map(assignments.map((a) => [a.buildingId, a.assignedTeamId]));
 
   const unassignableBuildings: { buildingId: number; name: string }[] = [];

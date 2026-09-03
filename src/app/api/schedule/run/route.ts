@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/db";
 import { teams } from "@/db/schema";
@@ -79,10 +79,18 @@ export async function POST(req: NextRequest) {
   const unassignableBuildings: { buildingId: number; name: string }[] = [];
 
   if (teamId != null) {
-    const team = await db.query.teams.findFirst({
-      where: and(eq(teams.id, teamId), eq(teams.userId, session.userId)),
+    // 이 팀 하나만 놓고 계산하면 "가상 기준점"이 미배정 건물 전체를 혼자 다
+    // 끌어가버린다(경쟁 상대가 없으니까) - 다른 팀 탭에서 봤을 때와 다른 결과가
+    // 나오면 안 되므로, 사용자의 팀 전체를 놓고 같은 배정을 계산한 뒤 이 팀
+    // 몫만 골라낸다("전체 배치"와 항상 같은 배정 기준을 쓰게 됨).
+    const allTeams = await db.query.teams.findMany({
+      where: eq(teams.userId, session.userId),
+      columns: { id: true },
     });
-    if (!team) return NextResponse.json({ error: "팀을 찾을 수 없습니다." }, { status: 404 });
+    if (!allTeams.some((t) => t.id === teamId)) {
+      return NextResponse.json({ error: "팀을 찾을 수 없습니다." }, { status: 404 });
+    }
+    const allTeamIds = allTeams.map((t) => t.id);
 
     const byBuilding = new Map<number, RawCategoryBuilding>();
     for (const b of allRawBuildings) if (!byBuilding.has(b.buildingId)) byBuilding.set(b.buildingId, b);
@@ -99,7 +107,7 @@ export async function POST(req: NextRequest) {
     const freeBuildings = uniqueBuildings
       .filter((b) => b.buildingTeamId == null)
       .map((b) => ({ buildingId: b.buildingId, coordinates: b.coordinates }));
-    const assignments = assignFreeBuildingsByProximity(pinnedByTeam, freeBuildings);
+    const assignments = assignFreeBuildingsByProximity(allTeamIds, pinnedByTeam, freeBuildings);
     const assignmentByBuildingId = new Map(assignments.map((a) => [a.buildingId, a.assignedTeamId]));
 
     for (const a of assignments) {

@@ -171,10 +171,11 @@ export default function TeamDistributeForm({
 
         <p className="text-[11px] text-silver-400">
           체크한 팀에게 그 달 건물 전체를 한 번에 나눠 배치합니다. 팀에 고정 담당으로
-          지정된 건물은 그대로 그 팀에, 미배정 건물은 각 팀의 고정 건물과 가까운 곳부터
-          거리 기준으로 자동 배정됩니다. 인원수는 팀 관리에서 정한 팀별 기본값을
-          사용합니다 - 바꾸려면 팀 관리에서 수정하세요. 팀·건물이 많으면 계산에 시간이
-          좀 걸릴 수 있습니다.
+          지정된 건물은 그대로 그 팀에 배치되고, 미배정 건물은 거리 기준으로 자동
+          배정됩니다(고정 담당을 지정한 팀은 그 위치를 우선 기준으로, 지정하지 않은
+          팀은 나머지 건물들의 지역 분포를 보고 자동으로 나뉨). 인원수는 팀 관리에서
+          정한 팀별 기본값을 사용합니다 - 바꾸려면 팀 관리에서 수정하세요. 팀·건물이
+          많으면 계산에 시간이 좀 걸릴 수 있습니다.
         </p>
         {error && <p className="text-[13px] text-red-600">{error}</p>}
         {lastApplied && (
@@ -203,8 +204,7 @@ export default function TeamDistributeForm({
                 자동 배정하지 못한 미배정 건물 {result.unassignableBuildings.length}건
               </p>
               <p className="mb-2 text-[#8a1f18]">
-                주소가 없거나(좌표를 못 구함), 체크한 팀 중 고정 담당 건물이 있는 팀이
-                없어서 거리 기준을 잡을 수 없었습니다.
+                주소가 없어서 좌표를 못 구해 거리 기준을 잡을 수 없었습니다.
               </p>
               <ul className="flex flex-col gap-1 text-[#8a1f18]">
                 {result.unassignableBuildings.map((b) => (
