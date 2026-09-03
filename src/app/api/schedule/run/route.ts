@@ -107,8 +107,11 @@ export async function POST(req: NextRequest) {
       pinnedByTeam.set(b.buildingTeamId, list);
     }
 
+    // 진짜 미배정 건물 + "지난번 자동 배정으로 붙었던"(사용자가 직접 정하지
+    // 않은) 건물 - 둘 다 이번에 다시 배정을 검토한다. 사용자가 직접 지정한
+    // 건물(teamAssignedAuto=false)만 절대 안 건드린다.
     const freeBuildings = uniqueBuildings
-      .filter((b) => b.buildingTeamId == null)
+      .filter((b) => b.buildingTeamId == null || b.buildingTeamAssignedAuto)
       .map((b) => ({
         buildingId: b.buildingId,
         coordinates: b.coordinates,
@@ -116,6 +119,7 @@ export async function POST(req: NextRequest) {
           category: r.category,
           rawAmount: r.rawAmount,
         })),
+        currentTeamId: b.buildingTeamId ?? undefined,
       }));
     const assignments = assignFreeBuildingsByProximity(
       allTeams,
@@ -135,7 +139,13 @@ export async function POST(req: NextRequest) {
     }
 
     placementRawBuildings = allRawBuildings.filter((b) => {
-      const effectiveTeamId = b.buildingTeamId ?? assignmentByBuildingId.get(b.buildingId) ?? null;
+      // 사용자가 직접 고정한 건물만 DB 값을 그대로 믿는다 - 자동 배정이었던
+      // 건물은(teamId가 있어도) 이번에 새로 계산한 배정 결과를 따라야, 인원
+      // 부족한 팀에서 여유 있는 팀으로 실제로 넘어간다.
+      const effectiveTeamId =
+        b.buildingTeamId != null && !b.buildingTeamAssignedAuto
+          ? b.buildingTeamId
+          : (assignmentByBuildingId.get(b.buildingId) ?? null);
       return effectiveTeamId === teamId;
     });
 

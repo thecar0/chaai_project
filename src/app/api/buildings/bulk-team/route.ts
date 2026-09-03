@@ -30,9 +30,11 @@ export async function POST(req: NextRequest) {
     if (!team) return NextResponse.json({ error: "팀을 찾을 수 없습니다." }, { status: 404 });
   }
 
+  // 사용자가 목록에서 직접 고른 것이니 "고정" 담당으로 취급한다 - 이후 자동
+  // 배치가 다른 팀으로 재검토하지 않는다.
   const updated = await db
     .update(buildings)
-    .set({ teamId: parsed.data.teamId })
+    .set({ teamId: parsed.data.teamId, teamAssignedAuto: false })
     .where(and(inArray(buildings.id, parsed.data.ids), eq(buildings.userId, session.userId)))
     .returning({ id: buildings.id });
 

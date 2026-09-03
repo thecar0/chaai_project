@@ -1,0 +1,1 @@
+ALTER TABLE "buildings" ADD COLUMN "team_assigned_auto" boolean DEFAULT false NOT NULL;

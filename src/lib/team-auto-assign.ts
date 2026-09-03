@@ -59,6 +59,10 @@ export type FreeBuildingInput = {
   // 같은 건물이 이번 달에 여러 항목(예: 드물게 종합+작동이 겹치는 경우)을 가질 수
   // 있어 전부 더해야 정확한 부담을 계산할 수 있다.
   demandItems: { category: InspectionCategory; rawAmount: number }[];
+  // 지난번 자동 배정으로 이미 어느 팀에 가 있었다면 그 팀 id - 그 팀에 여전히
+  // 용량이 남아있으면 우선 그대로 유지한다(매번 이유 없이 재배치되지 않도록).
+  // 진짜 미배정이면 undefined.
+  currentTeamId?: number;
 };
 
 export type FreeBuildingAssignment = {
@@ -91,6 +95,13 @@ function demandFor(items: { category: InspectionCategory; rawAmount: number }[],
  *    인원이 많은 팀은 같은 건물의 부담이 작게 계산되므로 자연히 더 많이 받을 수
  *    있다. 전 팀이 다 차면 그래도 가장 가까운 팀에 배정한다(그 팀은 "인원 부족"
  *    경고로 표시됨).
+ *
+ *    지난번 자동 배정으로 이미 어느 팀에 가 있던 건물(currentTeamId)은, 그 팀에
+ *    여전히 용량이 남아있으면 먼저 그대로 유지한다(거리 순위와 무관하게) - 매달
+ *    이유 없이 재배치되는 걸 막기 위해서다. 그 팀이 이미 넘쳤을 때만(예: 3팀은
+ *    인원 부족인데 4팀은 여유) 정상적인 "가까운, 용량 남은 팀" 배정으로 넘어가서
+ *    다른 팀으로 옮겨진다 - 이게 "인원 부족 팀에서 여유 팀으로 자동으로 넘어가는"
+ *    실제 메커니즘이다.
  */
 export function assignFreeBuildingsByProximity(
   teams: TeamCapacityInfo[],
@@ -174,7 +185,31 @@ export function assignFreeBuildingsByProximity(
   const remainingCapacity = new Map(teamIds.map((id) => [id, weekdaysInMonth]));
   const assignmentByBuildingId = new Map<number, number | null>();
 
+  // 0) 우선 유지: 지난번 자동 배정으로 이미 어느 팀에 가 있던 건물은, 그 팀에
+  // 아직 용량이 남아있으면 거리 순위를 따지지 않고 그대로 유지한다. 작은
+  // 건물(부담이 작은 것)부터 확정해야 "남은 용량"을 최대한 살릴 수 있다.
+  const sticky = ranked
+    .filter((r) => r.building.currentTeamId != null && remainingCapacity.has(r.building.currentTeamId))
+    .sort((a, b) => {
+      const teamA = teamById.get(a.building.currentTeamId!)!;
+      const teamB = teamById.get(b.building.currentTeamId!)!;
+      return (
+        demandFor(a.building.demandItems, teamA.personnelCount) -
+        demandFor(b.building.demandItems, teamB.personnelCount)
+      );
+    });
+  for (const { building } of sticky) {
+    const teamId = building.currentTeamId!;
+    const team = teamById.get(teamId)!;
+    const demand = demandFor(building.demandItems, team.personnelCount);
+    if (remainingCapacity.get(teamId)! >= demand) {
+      remainingCapacity.set(teamId, remainingCapacity.get(teamId)! - demand);
+      assignmentByBuildingId.set(building.buildingId, teamId);
+    }
+  }
+
   for (const { building, ranking } of ranked) {
+    if (assignmentByBuildingId.has(building.buildingId)) continue; // 0단계에서 이미 유지됨
     if (ranking.length === 0) {
       assignmentByBuildingId.set(building.buildingId, null);
       continue;

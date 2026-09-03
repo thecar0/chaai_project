@@ -47,6 +47,9 @@ export async function PATCH(
     .update(buildings)
     .set({
       teamId: data.teamId ?? null,
+      // 사용자가 수정 화면에서 직접 저장한 값이니 "고정" 담당으로 취급한다 -
+      // 이후 자동 배치가 다른 팀으로 재검토하지 않는다.
+      teamAssignedAuto: false,
       name: data.name,
       address: data.address,
       buildingType: data.buildingType,

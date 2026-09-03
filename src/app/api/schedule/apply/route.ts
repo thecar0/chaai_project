@@ -98,11 +98,14 @@ export async function POST(req: NextRequest) {
       byTeam.set(a.teamId, list);
     }
 
+    // teamAssignedAuto: true로 표시해서, 다음 배치 때 그 팀이 넘치면 이 건물이
+    // 다른 팀으로 다시 옮겨질 수 있는 "느슨한" 배정으로 남게 한다(사용자가 직접
+    // 지정한 건물과 구분).
     await Promise.all(
       Array.from(byTeam.entries()).map(([teamId, buildingIds]) =>
         db
           .update(buildings)
-          .set({ teamId })
+          .set({ teamId, teamAssignedAuto: true })
           .where(and(eq(buildings.userId, session.userId), inArray(buildings.id, buildingIds)))
       )
     );

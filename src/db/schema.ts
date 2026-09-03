@@ -71,6 +71,11 @@ export const buildings = pgTable(
       .notNull(),
     // 담당 팀 - 미배정(null) 허용. 팀이 삭제돼도 건물은 남아야 하므로 set null.
     teamId: integer("team_id").references(() => teams.id, { onDelete: "set null" }),
+    // true면 이 teamId는 사용자가 직접 정한 게 아니라 "전체 배치"의 거리 기준
+    // 자동 배정이 붙여준 것 - 다음 배치 때 그 팀이 넘치면 다른 팀으로 다시
+    // 옮겨질 수 있는 "느슨한" 배정이다. 사용자가 건물 목록/수정 화면·엑셀
+    // 담당팀 등으로 직접 지정하면 false(고정)가 된다.
+    teamAssignedAuto: boolean("team_assigned_auto").default(false).notNull(),
     name: varchar("name", { length: 255 }).notNull(), // 건축물명
     // 대지위치/도로명주소 - 실제 주소를 모르는 경우(예: 엑셀에 주소 없이 이름만 있는
     // 행) null로 두고, 나중에 "주소 채우기"에서 건축물명으로 검색해 채워 넣는다.

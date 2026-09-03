@@ -31,6 +31,10 @@ export type RawCategoryBuilding = {
   coordinates: Coordinates | null;
   // 이 건물이 현재 "고정 담당"으로 지정된 팀 - null이면 미배정(자동 배정 대상).
   buildingTeamId: number | null;
+  // buildingTeamId가 있어도, 그게 사용자가 직접 정한 게 아니라 지난번 자동
+  // 배정이 붙여준 것이면 true - 이번 배치에서 그 팀이 넘치면 다른 팀으로 다시
+  // 옮겨질 수 있는 "느슨한" 배정으로 취급한다.
+  buildingTeamAssignedAuto: boolean;
 };
 
 // 팀 필터 없이 항상 전체 건물을 모은다 - 팀별 배정은 DB 쿼리 단계가 아니라
@@ -79,6 +83,7 @@ export async function collectCategoryRawBuildings(
       latitude: buildings.latitude,
       longitude: buildings.longitude,
       teamId: buildings.teamId,
+      teamAssignedAuto: buildings.teamAssignedAuto,
     })
     .from(inspectionSchedules)
     .innerJoin(buildings, eq(inspectionSchedules.buildingId, buildings.id))
@@ -147,6 +152,7 @@ export async function collectCategoryRawBuildings(
         rawAmount,
         coordinates,
         buildingTeamId: row.teamId,
+        buildingTeamAssignedAuto: row.teamAssignedAuto,
       };
     })
   );
