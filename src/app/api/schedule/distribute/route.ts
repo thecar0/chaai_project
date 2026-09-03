@@ -130,11 +130,15 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  function isHardPinned(b: RawCategoryBuilding): boolean {
+    return b.buildingTeamId != null && !b.buildingTeamAssignedAuto;
+  }
+
   function effectiveTeamId(b: RawCategoryBuilding): number | null {
     // 사용자가 직접 고정한 건물만 DB 값을 그대로 믿는다 - 자동 배정이었던 건물은
     // 이번에 새로 계산한 배정 결과를 따라야 팀 간 재배치가 실제로 반영된다.
-    if (b.buildingTeamId != null && !b.buildingTeamAssignedAuto) {
-      return selectedTeamIdSet.has(b.buildingTeamId) ? b.buildingTeamId : null;
+    if (isHardPinned(b)) {
+      return selectedTeamIdSet.has(b.buildingTeamId!) ? b.buildingTeamId : null;
     }
     return assignmentByBuildingId.get(b.buildingId) ?? null;
   }
@@ -156,27 +160,117 @@ export async function POST(req: NextRequest) {
     return limits;
   }
 
-  const teamResults: {
-    teamId: number;
-    teamName: string;
-    personnelCount: number;
-    days: ReturnType<typeof formatPlacementResult>["days"];
-    unplaced: ReturnType<typeof formatPlacementResult>["unplaced"];
-    autoAssignedBuildingIds: number[];
-    trueMinimumPersonnel: number | null;
-    // "understaffed": 지금 인원으론 못 다 채움 (더 필요) / "overstaffed": 지금보다
-    // 적은 인원으로도 다 들어감 (여유) / null: 적정
-    warning: "understaffed" | "overstaffed" | null;
-  }[] = [];
+  // 거리·용량 근사치로 정한 배정을 실제로 하나씩 바꿀 수 있는 가변 맵으로
+  // 관리한다 - 구제 단계(아래)에서 실제 배치 엔진 결과를 보고 옮길 수 있어야 하므로.
+  const currentAssignment = new Map<number, number>();
+  for (const b of uniqueBuildings) {
+    const t = effectiveTeamId(b);
+    if (t != null) currentAssignment.set(b.buildingId, t);
+  }
+
+  function rawBuildingsFor(teamId: number): RawCategoryBuilding[] {
+    return allRawBuildings.filter((b) => currentAssignment.get(b.buildingId) === teamId);
+  }
+
+  async function runTeamPlacement(
+    teamId: number,
+    n: number
+  ): Promise<{ result: PlacementResult; dailyLimits: Record<InspectionCategory, number> }> {
+    const limits = dailyLimitsFor(n);
+    const result = await placeInspections(
+      toPlacementBuildings(rawBuildingsFor(teamId), limits),
+      startDate,
+      endDate,
+      getRoute
+    );
+    return { result, dailyLimits: limits };
+  }
+
+  type TeamRunResult = { placement: PlacementResult; dailyLimits: Record<InspectionCategory, number> };
+  const latestRun = new Map<number, TeamRunResult>();
 
   try {
     for (const team of selectedTeams) {
-      const teamRawBuildings = allRawBuildings.filter((b) => effectiveTeamId(b) === team.id);
+      if (rawBuildingsFor(team.id).length === 0) continue;
+      const { result: placement, dailyLimits } = await runTeamPlacement(team.id, team.personnelCount);
+      latestRun.set(team.id, { placement, dailyLimits });
+    }
+
+    // 구제 단계: 면적/세대수 비율 근사치로는 안 넘쳤는데 실제 배치 엔진(이동시간
+    // 포함)에서는 못 들어간 항목이 있을 수 있다 - 근사치가 놓친 초과분이다. 하드
+    // 고정이 아닌 건물이 "인원 부족"으로 못 들어갔으면, 다른 팀에 실제로 넣어봐서
+    // 들어가면(그 팀 진짜 배치 엔진 기준으로 확인) 그쪽으로 옮긴다. 팀이 몇 개
+    // 안 되므로 라운드를 몇 번 반복해도 비용이 크지 않다.
+    const MAX_RESCUE_ROUNDS = 3;
+    for (let round = 0; round < MAX_RESCUE_ROUNDS; round++) {
+      let movedAny = false;
+
+      for (const donor of selectedTeams) {
+        const run = latestRun.get(donor.id);
+        if (!run) continue;
+        const capacityUnplaced = run.placement.unplaced.filter((u) => u.reasonCode === "capacity");
+        if (capacityUnplaced.length === 0) continue;
+
+        const movedBuildingIds = new Set<number>();
+        for (const item of capacityUnplaced) {
+          if (movedBuildingIds.has(item.buildingId)) continue; // 이미 이번 라운드에 옮겨진 건물의 다른 항목
+          const buildingRow = byBuilding.get(item.buildingId)?.[0];
+          if (!buildingRow || isHardPinned(buildingRow)) continue; // 고정 담당은 절대 안 옮김
+
+          // 여유가 가장 많을 만한 순서로 시도한다(인원 많은 팀 먼저) - 실제로
+          // 맞는지는 배치를 다시 돌려서 확인한다.
+          const candidates = selectedTeams
+            .filter((t) => t.id !== donor.id)
+            .sort((a, b) => b.personnelCount - a.personnelCount);
+
+          for (const receiver of candidates) {
+            currentAssignment.set(item.buildingId, receiver.id);
+            const { result: trialResult, dailyLimits: trialLimits } = await runTeamPlacement(
+              receiver.id,
+              receiver.personnelCount
+            );
+            const stillUnplaced = trialResult.unplaced.some(
+              (u) => u.buildingId === item.buildingId && u.reasonCode === "capacity"
+            );
+            if (!stillUnplaced) {
+              latestRun.set(receiver.id, { placement: trialResult, dailyLimits: trialLimits });
+              movedBuildingIds.add(item.buildingId);
+              movedAny = true;
+              break;
+            }
+            currentAssignment.set(item.buildingId, donor.id); // 안 되면 원래대로 되돌림
+          }
+        }
+
+        if (movedBuildingIds.size > 0) {
+          const { result, dailyLimits } = await runTeamPlacement(donor.id, donor.personnelCount);
+          latestRun.set(donor.id, { placement: result, dailyLimits });
+        }
+      }
+
+      if (!movedAny) break;
+    }
+
+    const teamResults: {
+      teamId: number;
+      teamName: string;
+      personnelCount: number;
+      days: ReturnType<typeof formatPlacementResult>["days"];
+      unplaced: ReturnType<typeof formatPlacementResult>["unplaced"];
+      autoAssignedBuildingIds: number[];
+      trueMinimumPersonnel: number | null;
+      // "understaffed": 지금 인원으론 못 다 채움 (더 필요) / "overstaffed": 지금보다
+      // 적은 인원으로도 다 들어감 (여유) / null: 적정
+      warning: "understaffed" | "overstaffed" | null;
+    }[] = [];
+
+    for (const team of selectedTeams) {
+      const run = latestRun.get(team.id);
       const autoAssignedBuildingIds = uniqueBuildings
-        .filter((b) => b.buildingTeamId == null && effectiveTeamId(b) === team.id)
+        .filter((b) => !isHardPinned(b) && currentAssignment.get(b.buildingId) === team.id)
         .map((b) => b.buildingId);
 
-      if (teamRawBuildings.length === 0) {
+      if (!run) {
         teamResults.push({
           teamId: team.id,
           teamName: team.name,
@@ -190,23 +284,8 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      async function runPlacement(
-        n: number
-      ): Promise<{ result: PlacementResult; dailyLimits: Record<InspectionCategory, number> }> {
-        const limits = dailyLimitsFor(n);
-        const result = await placeInspections(
-          toPlacementBuildings(teamRawBuildings, limits),
-          startDate,
-          endDate,
-          getRoute
-        );
-        return { result, dailyLimits: limits };
-      }
-
-      const { result: placement, dailyLimits } = await runPlacement(team.personnelCount);
-      const { days, unplaced } = formatPlacementResult(placement, dailyLimits);
-
-      const trueMinimumPersonnel = await findTrueMinimumPersonnel(runPlacement);
+      const { days, unplaced } = formatPlacementResult(run.placement, run.dailyLimits);
+      const trueMinimumPersonnel = await findTrueMinimumPersonnel((n) => runTeamPlacement(team.id, n));
       let warning: "understaffed" | "overstaffed" | null = null;
       if (trueMinimumPersonnel != null) {
         if (trueMinimumPersonnel > team.personnelCount) warning = "understaffed";
@@ -224,6 +303,12 @@ export async function POST(req: NextRequest) {
         warning,
       });
     }
+
+    return NextResponse.json({
+      teams: teamResults,
+      unassignableBuildings,
+      warnings: allWarnings,
+    });
   } catch (err) {
     if (err instanceof CapacityRuleError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
@@ -233,10 +318,4 @@ export async function POST(req: NextRequest) {
     }
     throw err;
   }
-
-  return NextResponse.json({
-    teams: teamResults,
-    unassignableBuildings,
-    warnings: allWarnings,
-  });
 }
